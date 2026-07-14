@@ -15,7 +15,8 @@ inside the room, so this module needs no crypto -- only stdlib. The raw quote si
 check is delegated to a QuoteVerifier (default: the dcap-qvl CLI), so the logic is testable
 with a fake verifier.
 
-Ported from the tested spike (kata-sn60-runner/*). Gated behind KATA_SN60_USE_TEE_ROOM.
+Ported from the tested sealed-room spike (now generalized into kata-tee-runner). Gated behind
+KATA_SN60_USE_TEE_ROOM.
 """
 from __future__ import annotations
 

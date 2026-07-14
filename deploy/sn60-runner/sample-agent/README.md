@@ -29,7 +29,7 @@ def agent_main(project_dir=None, inference_api=None) -> dict:
    python3 kata_seal.py --room https://<ROOM-URL> --key akml-your-key --measurement <compose-hash>
    ```
    (The maintainer publishes the room URL + approved compose-hash. `kata_seal.py` is in the
-   `kata-sn60-runner` tools.)
+   `kata-tee-runner` tools.)
 
 ## Test it locally (optional)
 ```bash
