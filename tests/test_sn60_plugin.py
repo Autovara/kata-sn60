@@ -97,6 +97,17 @@ def test_sn60_plugin_identity_and_env() -> None:
     assert plugin.scoring_profile is ScoringProfile.DETERMINISTIC
     assert plugin.validator_identity == "sn60-bitsec-sandbox"
     assert plugin.environment_spec().network == "relay_only"
+    # Default execution backend is the local sandbox (TEE is opt-in).
+    assert plugin.environment_spec().execution == "sandbox"
+
+
+def test_environment_spec_execution_reflects_tee_optin(monkeypatch) -> None:
+    plugin = Sn60BitsecPlugin()
+    monkeypatch.delenv("KATA_SN60_USE_TEE_ROOM", raising=False)
+    assert plugin.environment_spec().execution == "sandbox"
+    monkeypatch.setenv("KATA_SN60_USE_TEE_ROOM", "1")
+    # The platform reads EnvSpec.execution to know the lane runs in the sealed room.
+    assert plugin.environment_spec().execution == "tee"
 
 
 def test_sn60_plugin_sample_problems_and_identity(tmp_path: Path) -> None:

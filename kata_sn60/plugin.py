@@ -27,6 +27,7 @@ from kata_sn60.sn60_bitsec import (
     Sn60ReplicaResult,
     Sn60SandboxSource,
     Sn60VariantSummary,
+    _sn60_use_tee_room,
     build_default_evaluation_hook,
     build_default_execution_hook,
     hash_bundle_root,
@@ -91,12 +92,21 @@ class Sn60BitsecPlugin(SubnetPlugin):
         self._scorer_version = scorer_version
 
     def environment_spec(self) -> EnvSpec:
-        # SN60 agents run sealed except for the pinned-model inference relay.
-        return EnvSpec(network="relay_only")
+        # SN60 agents run sealed except for the pinned-model inference relay. Execution is the local
+        # sandbox unless the sealed-room (TEE) path is opted in (KATA_SN60_USE_TEE_ROOM) -- the
+        # platform reads EnvSpec.execution to know which backend the lane uses.
+        return EnvSpec(
+            network="relay_only",
+            execution="tee" if _sn60_use_tee_room() else "sandbox",
+        )
 
     def resolve_execution_hook(self, source: Sn60SandboxSource) -> Sn60ExecutionHook:
-        """The execution hook (injected in tests, real sandbox in production)."""
-        return self._execution_hook or build_default_execution_hook(source)
+        """The execution hook (injected in tests, real sandbox in production). The backend is chosen
+        by the lane's ``EnvSpec.execution`` (``"tee"`` -> sealed room, else local sandbox)."""
+        if self._execution_hook:
+            return self._execution_hook
+        use_tee = self.environment_spec().execution == "tee"
+        return build_default_execution_hook(source, use_tee=use_tee)
 
     def card_for_summary(self, summary: Sn60VariantSummary) -> ScoreCard:
         """Wrap an already-computed variant summary as a ScoreCard (e.g. a screener

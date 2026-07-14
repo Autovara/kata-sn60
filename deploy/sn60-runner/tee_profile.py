@@ -124,7 +124,8 @@ class Sn60TeeProfile:
             cp_out = docker(["cp", f"{container}:/app/report.json", str(workdir / "report.json")])
             if cp_out.returncode != 0:
                 raise RuntimeError(
-                    f"no report.json. start stderr: {start.stderr[:500]} stdout: {start.stdout[:300]}"
+                    "no report.json. "
+                    f"start stderr: {start.stderr[:500]} stdout: {start.stdout[:300]}"
                 )
             return json.loads((workdir / "report.json").read_text())
         finally:

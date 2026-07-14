@@ -894,10 +894,15 @@ def ensure_internal_agent_network(
 def build_default_execution_hook(
     source: Sn60SandboxSource,
     *,
+    use_tee: bool | None = None,
     timeout_env_name: str = "KATA_SN60_EXECUTION_TIMEOUT_SECONDS",
     timeout_default: float = DEFAULT_EXECUTION_SUBPROCESS_TIMEOUT_SECONDS,
 ) -> Sn60ExecutionHook:
-    if _sn60_use_tee_room():
+    # The backend is normally chosen by the lane's EnvSpec.execution (passed as ``use_tee`` by
+    # resolve_execution_hook); when unset, fall back to the KATA_SN60_USE_TEE_ROOM env directly.
+    if use_tee is None:
+        use_tee = _sn60_use_tee_room()
+    if use_tee:
         # Run candidates in a sealed room (miner pays, owner never sees the key) instead of
         # the local sandbox. Opt-in via KATA_SN60_USE_TEE_ROOM; default stays the sandbox.
         return build_tee_room_execution_hook(source)
