@@ -997,7 +997,7 @@ def resolve_sn60_room_url() -> str:
 
 
 def resolve_sn60_room_policy():
-    from kata_sn60.validator_system.tee_room import RoomPolicy
+    from kata_sn60.execution.tee_room import RoomPolicy
 
     raw = os.environ.get("KATA_SN60_ROOM_MEASUREMENTS", "")
     measurements = frozenset(m.strip() for m in raw.split(",") if m.strip())
@@ -1022,7 +1022,7 @@ def build_tee_room_execution_hook(source: Sn60SandboxSource) -> Sn60ExecutionHoo
     The miner pays the inference and the owner never sees the key; Kata verifies the room's
     attestation and returns the verified report for the normal judge to score.
     """
-    from kata_sn60.validator_system.tee_room import (
+    from kata_sn60.execution.tee_room import (
         DcapQvlVerifier,
         HttpRoomLauncher,
         evaluate_candidate_in_room,
