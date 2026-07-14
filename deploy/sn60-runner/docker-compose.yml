@@ -1,0 +1,25 @@
+services:
+  kata-sn60-runner:
+    image: docker.io/carloscosimano/kata-sn60-runner:v9
+    ports:
+      - "8080:8080"
+    environment:
+      # The miner's inference key (sealed secret delivered to the attested room).
+      - INFERENCE_API_KEY=${INFERENCE_API_KEY}
+      - INFERENCE_API=${INFERENCE_API}
+      # Registry read:packages login to pull the private problem image (sealed secret).
+      - GHCR_USER=${GHCR_USER}
+      - GHCR_TOKEN=${GHCR_TOKEN}
+      # --- in-room model-pinning relay (real, fair inference) ---
+      # The relay forwards the miner's key DIRECTLY to a provider. Point it at a provider
+      # serving the pinned model; e.g. AkashML + qwen3.6.
+      - KATA_RELAY_DIRECT_UPSTREAM=${KATA_RELAY_DIRECT_UPSTREAM}
+      - KATA_RELAY_DIRECT_MODEL=${KATA_RELAY_DIRECT_MODEL}
+      - KATA_RELAY_PINNED_MODEL=${KATA_RELAY_PINNED_MODEL}
+      - KATA_RELAY_DIRECT_KEY_PREFIXES=${KATA_RELAY_DIRECT_KEY_PREFIXES}
+      - KATA_RELAY_DIRECT_ALLOW_UNKNOWN=${KATA_RELAY_DIRECT_ALLOW_UNKNOWN}
+    volumes:
+      # dstack guest-agent socket -- lets the app call get_quote.
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      # docker socket -- lets the runner pull/run the problem image inside the room.
+      - /var/run/docker.sock:/var/run/docker.sock

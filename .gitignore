@@ -3,3 +3,6 @@
 .ruff_cache/
 __pycache__/
 *.pyc
+
+# The SN60 runner relay is vendored by deploy/sn60-runner/build.sh (see KATA-TEE-RUNNER-PLAN §6).
+deploy/sn60-runner/relay.py
