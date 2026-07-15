@@ -1043,7 +1043,6 @@ def record_sn60_lane_provenance(
     duel_summary: Sn60DuelSummary,
     screening_result: dict[str, object],
     public_root: str | None = None,
-    reward_label_applied: str | None = None,
 ) -> tuple[Path, Path]:
     decision = evaluate_sn60_promotion(
         king=duel_summary.king,
@@ -1092,7 +1091,6 @@ def record_sn60_lane_provenance(
                 "candidate": duel_summary.candidate.invalid_runs,
             },
             final_winner=decision.final_winner,
-            reward_label_applied=reward_label_applied,
             recorded_at=datetime.now(UTC).isoformat(),
         ),
         public_root=public_root,
@@ -1161,7 +1159,6 @@ def record_sn60_screening_failure_provenance(
             true_positives={"king": 0, "candidate": 0},
             invalid_runs={"king": 0, "candidate": 1},
             final_winner="king",
-            reward_label_applied=None,
             recorded_at=datetime.now(UTC).isoformat(),
         ),
         public_root=public_root,
