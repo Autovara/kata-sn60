@@ -5,6 +5,7 @@ import types
 from pathlib import Path
 
 from kata.promotion import (
+    bootstrap_lane_king,
     find_evaluator_pack_entry,
     promote_lane_king,
     resolve_lane_king_hash,
@@ -224,3 +225,55 @@ def test_promote_lane_king_publishes_bundle_and_updates_lane_state(
     assert challenge_state.selected_project_keys == ["project-alpha"]
     assert promotion_record.final_winner == "candidate"
     assert promotion_record.true_positives == {"king": 1, "candidate": 3}
+
+
+def test_bootstrap_lane_king_publishes_a_public_baseline_proof(tmp_path: Path) -> None:
+    write_lane(tmp_path)
+    baseline_root = tmp_path / "baseline"
+    write_bundle(
+        baseline_root,
+        "from pathlib import Path\n\n"
+        "def agent_main(project_dir=None, inference_api=None):\n"
+        "    findings = []\n"
+        "    root = Path(project_dir or '.')\n"
+        "    for source in root.rglob('*.sol'):\n"
+        "        if 'TODO' in source.read_text(encoding='utf-8', errors='ignore'):\n"
+        "            findings.append({'title': 'review TODO', 'file': str(source)})\n"
+        "    return {'vulnerabilities': findings}\n",
+    )
+    public_current = tmp_path / "public-results" / "current.json"
+    public_current.parent.mkdir(parents=True)
+    public_current.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "dashboard_url": "https://board.example",
+                "benchmark": {"name": "pinned-benchmark"},
+                "latest_round": {"round_id": "old-round"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    entry = find_evaluator_pack_entry("sn60__bitsec", "miner", public_root=str(tmp_path))
+    assert entry is not None
+
+    result = bootstrap_lane_king(
+        entry=entry,
+        baseline_path=str(baseline_root),
+        baseline_id="sn60-initial-baseline",
+        public_root=str(tmp_path),
+    )
+
+    payload = json.loads(public_current.read_text(encoding="utf-8"))
+    assert result.king.current_king_submission_id == "sn60-initial-baseline"
+    assert payload["current_king"] == {
+        "author": None,
+        "submission_id": "sn60-initial-baseline",
+        "source_pull_request": None,
+        "path": "kings/sn60__bitsec/miner",
+        "artifact_hash": result.king.current_king_artifact_hash,
+        "promoted_at": result.king.promotion_timestamp,
+    }
+    assert payload["latest_round"] is None
+    assert payload["benchmark"] == {"name": "pinned-benchmark"}
+    assert payload["dashboard_url"] == "https://board.example"

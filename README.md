@@ -53,7 +53,8 @@ so `validator.*` resolves against the sandbox's **own** `uv` env (its `uv.lock`/
 deliberate isolation boundary. **Do not copy the sandbox into this repo:** it is upstream, it
 updates (new problems, scorer bumps), and forking it would make scores diverge from the live subnet.
 
-**Pinned coupling** (bump deliberately, only after re-review — keep `deploy.sh` in sync):
+**Pinned coupling** (bump deliberately, only after re-review — keep the production deployment
+script in sync):
 
 | what | value |
 |---|---|
@@ -65,6 +66,6 @@ updates (new problems, scorer bumps), and forking it would make scores diverge f
 **Minimal surface kata-sn60 actually uses** — `validator/{executor,scorer,models/platform,platform_client}.py`,
 `config.py`, `loggers/logger.py`, the benchmark JSON, and the sandbox's `uv.lock`/`.venv`/`.git`.
 Everything else in the sandbox (`agent_sandbox/`, `projects.json`, `manager.py`, `neurons/`,
-`miner/`, `template/`, root Docker/compose) is unused. The `bitsec_proxy` inference-metering
-service is built from `sandbox/validator/proxy` **by `deploy.sh`**; kata-sn60 code only speaks HTTP
-to the already-running proxy.
+`miner/`, `template/`, root Docker/compose) is unused. The validator-only `bitsec_proxy` scoring
+service is built from `sandbox/validator/proxy` by the production deployment script; miner agents
+never reach it.

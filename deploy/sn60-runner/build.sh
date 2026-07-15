@@ -9,10 +9,15 @@ set -euo pipefail
 
 TAG="${1:?usage: ./build.sh <tag> [--push]}"
 BASE="${BASE:?set BASE to the immutable kata-tee-runner image digest}"
-IMAGE="docker.io/carloscosimano/kata-sn60-runner:${TAG}"
+IMAGE="${IMAGE:-docker.io/carloscosimano/kata-sn60-runner:${TAG}}"
 case "$BASE" in
   *@sha256:*) ;;
   *) echo "ERROR: BASE must be an immutable image digest (...@sha256:...)" >&2; exit 1 ;;
+esac
+
+case "${2:-}" in
+  ""|--push) ;;
+  *) echo "ERROR: usage: ./build.sh <tag> [--push]" >&2; exit 1 ;;
 esac
 
 docker build --build-arg BASE="$BASE" -t "$IMAGE" .
