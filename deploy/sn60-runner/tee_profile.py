@@ -86,7 +86,7 @@ class Sn60TeeProfile:
             provenance={
                 "profile": "sn60-bitsec-v1",
                 "project_image": "fixture@sha256:fake",
-                "pinned_model": "fixture",
+                "inference_policy": "fixture",
                 "job_id": job_id,
             },
         )
@@ -123,10 +123,9 @@ class Sn60TeeProfile:
         if pull.returncode != 0:
             raise RuntimeError(f"pull {image} failed: {pull.stderr[:400]}")
 
-        # Bring up the in-room relay + sealed network so the agent does real, pinned inference.
-        pinned_model = os.environ.get("KATA_RELAY_PINNED_MODEL", "").strip()
-        if not pinned_model:
-            raise RuntimeError("KATA_RELAY_PINNED_MODEL must name the model attested runs use")
+        # Bring up the in-room relay + sealed network. The relay forwards the
+        # miner's request and decrypted key without imposing a platform model or
+        # token/call policy.
         start_relay_once()
         ensure_relay_net_once()
 
@@ -193,7 +192,7 @@ class Sn60TeeProfile:
                 provenance={
                     "profile": "sn60-bitsec-v1",
                     "project_image": digest,
-                    "pinned_model": pinned_model,
+                    "inference_policy": "miner-controlled",
                     "job_id": job_id,
                 },
             )

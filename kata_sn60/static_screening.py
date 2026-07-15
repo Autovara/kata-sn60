@@ -1,8 +1,7 @@
-"""SN60 static bundle screening (benchmark-leak / secret / no-op agent checks).
+"""SN60 static bundle screening for replay, secrets, and no-op agents.
 
-Split out of the generic ``screening_system/rules.py`` so the platform's rule set stays
-subnet-blind; reached through the SN60 plugin's ``static_screen`` seam. Reuses the generic
-helpers/patterns that stay in ``rules.py``. Relocates to ``kata-sn60`` in Phase 3.
+Kata invokes this through the plugin's ``static_screen`` hook; shared structural
+checks remain in Kata while benchmark-specific rules live here.
 """
 
 from __future__ import annotations
@@ -22,6 +21,8 @@ from kata.screening.python_ast import (
 )
 from kata.screening.rules import SECRET_PATTERN, finding_reasons, reject_finding
 from kata.submissions.bundle import AGENT_ENTRY_FILENAME, SEALED_KEY_FILENAME
+
+from kata_sn60.execution.policy import tee_execution_enabled
 
 BENCHMARK_LEAK_TOKENS = (
     "curated-highs-only",
@@ -168,8 +169,7 @@ def screen_sn60_static_bundle(bundle_files: dict[str, str]) -> list[ScreeningFin
             findings.append(
                 reject_finding(
                     "sn60.answer_key_token",
-                    "SN60 screening rejected benchmark-answer leakage token: "
-                    f"`{token}`.",
+                    f"SN60 screening rejected benchmark-answer leakage token: `{token}`.",
                     path=AGENT_ENTRY_FILENAME,
                 )
             )
@@ -177,14 +177,7 @@ def screen_sn60_static_bundle(bundle_files: dict[str, str]) -> list[ScreeningFin
 
 
 def _tee_execution_enabled() -> bool:
-    import os
-
-    return os.environ.get("KATA_SN60_USE_TEE_ROOM", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return tee_execution_enabled()
 
 
 def validate_sn60_static_screening(candidate_root: str | Path) -> list[str]:

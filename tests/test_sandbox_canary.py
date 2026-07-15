@@ -17,9 +17,7 @@ def test_rename_source_tree_renames_source_and_copies_the_rest(tmp_path: Path) -
     (src / "contracts" / "Staking.sol").write_text(
         "contract StakingBuffer { uint redelegateWithdrawnHYPE; }", encoding="utf-8"
     )
-    (src / "README.md").write_text(
-        "redelegateWithdrawnHYPE is documented here", encoding="utf-8"
-    )
+    (src / "README.md").write_text("redelegateWithdrawnHYPE is documented here", encoding="utf-8")
     dst = tmp_path / "dst"
 
     mapping = rename_source_tree(src, dst)

@@ -8,13 +8,15 @@ CONTRACT (required by the bitsec harness that runs your agent):
 INFERENCE (how you call the AI inside the room):
   POST  {inference_api}/inference
     headers: {"x-inference-api-key": os.environ["INFERENCE_API_KEY"]}
-    body:    {"messages": [...], "max_tokens": N}     # NOTE: no "model" -- the relay pins it
+    body:    {"model": "your/provider-model", "messages": [...]}
     resp:    OpenAI-style {"choices": [{"message": {"content": "..."}}]}
-  The model is pinned and paid by YOUR sealed key -- you just send messages.
+  You choose the provider/model and pay with YOUR sealed key. The relay forwards
+  request controls unchanged.
 
 This is a STARTING POINT. It discovers source files, asks the model to find bugs, and
 returns them. Improve the prompts / add heuristics / pick better files to win.
 """
+
 from __future__ import annotations
 
 import json
@@ -25,7 +27,7 @@ import urllib.request
 from pathlib import Path
 
 SOURCE_EXTS = (".sol", ".vy", ".cairo")
-MAX_FILES = 12          # cap how many files you audit (inference costs YOUR key)
+MAX_FILES = 12  # cap how many files you audit (inference costs YOUR key)
 MAX_FILE_CHARS = 12_000
 MAX_FINDINGS = 10
 HTTP_TIMEOUT = 120
@@ -33,8 +35,14 @@ HTTP_TIMEOUT = 120
 
 def _project_root(project_dir: str | None) -> Path | None:
     """Where the contract code lives. The harness mounts it at /app/project_code."""
-    candidates = [project_dir, os.environ.get("PROJECT_DIR"),
-                  "/app/project_code", "/app/project", "/code", "."]
+    candidates = [
+        project_dir,
+        os.environ.get("PROJECT_DIR"),
+        "/app/project_code",
+        "/app/project",
+        "/code",
+        ".",
+    ]
     for c in candidates:
         if c and Path(c).is_dir():
             return Path(c)
@@ -68,9 +76,9 @@ def _ask_model(inference_api: str | None, rel: str, code: str) -> list[dict]:
         '"description": str}. Return [] if there are none.\n\n'
         f"FILE: {rel}\n```\n{code}\n```"
     )
-    body = json.dumps(
-        {"messages": [{"role": "user", "content": prompt}], "max_tokens": 1500}
-    ).encode("utf-8")
+    # This template deliberately does not impose a model or token cap. Add the
+    # model and request controls that match the provider funded by your key.
+    body = json.dumps({"messages": [{"role": "user", "content": prompt}]}).encode("utf-8")
     req = urllib.request.Request(
         endpoint + "/inference",
         data=body,
@@ -105,13 +113,15 @@ def _parse_findings(content: str, rel: str) -> list[dict]:
             line = int(it.get("line", 0))
         except (ValueError, TypeError):
             line = 0
-        findings.append({
-            "title": str(it.get("title", "vulnerability"))[:200],
-            "severity": str(it.get("severity", "medium")).lower(),
-            "file": rel,
-            "line": line,
-            "description": str(it.get("description", ""))[:1000],
-        })
+        findings.append(
+            {
+                "title": str(it.get("title", "vulnerability"))[:200],
+                "severity": str(it.get("severity", "medium")).lower(),
+                "file": rel,
+                "line": line,
+                "description": str(it.get("description", ""))[:1000],
+            }
+        )
     return findings
 
 

@@ -193,6 +193,17 @@ def test_resolve_direct_provider_can_allow_unknown_keys(monkeypatch) -> None:
     assert resolve_direct_provider("sk-or-test") is None
 
 
+def test_direct_provider_does_not_require_a_forced_model(monkeypatch) -> None:
+    monkeypatch.setenv("KATA_RELAY_DIRECT_KEY_PREFIXES", "miner-")
+    monkeypatch.setenv("KATA_RELAY_DIRECT_UPSTREAM", "https://provider.example/v1/chat/completions")
+    monkeypatch.delenv("KATA_RELAY_DIRECT_MODEL", raising=False)
+
+    provider = resolve_direct_provider("miner-key")
+
+    assert provider is not None
+    assert provider.model == ""
+
+
 def test_resolve_max_output_tokens_default(monkeypatch) -> None:
     monkeypatch.delenv("KATA_RELAY_MAX_OUTPUT_TOKENS", raising=False)
     assert resolve_max_output_tokens() == 32000
@@ -283,6 +294,9 @@ def relay_and_upstream(monkeypatch):
     monkeypatch.setenv("KATA_RELAY_AGENT_CALL_BUDGET", "0")
     monkeypatch.setenv("KATA_RELAY_AGENT_INPUT_TOKEN_BUDGET", "0")
     monkeypatch.setenv("KATA_RELAY_AGENT_TOKEN_BUDGET", "0")
+    # These tests cover the optional legacy policy. Miner-funded production
+    # leaves this disabled and forwards the request unchanged.
+    monkeypatch.setenv("KATA_RELAY_ENFORCE_PLATFORM_POLICY", "1")
     upstream = ThreadingHTTPServer(("127.0.0.1", 0), _RecordingUpstream)
     upstream.records = []  # type: ignore[attr-defined]
     upstream.daemon_threads = True
@@ -560,6 +574,39 @@ def test_inference_model_is_pinned_before_reaching_upstream(relay_and_upstream) 
     assert record["headers"].get("x-inference-api-key") == "sk-or-abc"
 
 
+def test_miner_funded_default_preserves_request_controls(relay_and_upstream, monkeypatch) -> None:
+    base, upstream = relay_and_upstream
+    monkeypatch.setenv("KATA_RELAY_ENFORCE_PLATFORM_POLICY", "0")
+    body = json.dumps(
+        {
+            "model": "miner/provider-model",
+            "messages": [{"role": "user", "content": "audit"}],
+            "temperature": 0.7,
+            "seed": 42,
+            "max_tokens": 123_456,
+        }
+    ).encode()
+
+    status, _, _ = _post(
+        base + "/inference",
+        body,
+        {"Content-Type": "application/json", "x-inference-api-key": "sk-or-miner"},
+    )
+
+    assert status == 200
+    assert json.loads(upstream.records[-1]["body"]) == json.loads(body)
+
+
+def test_health_reports_miner_controlled_policy(relay_and_upstream, monkeypatch) -> None:
+    base, _upstream = relay_and_upstream
+    monkeypatch.setenv("KATA_RELAY_ENFORCE_PLATFORM_POLICY", "0")
+
+    with urlopen(base + "/healthz", timeout=10) as response:
+        payload = json.loads(response.read())
+
+    assert payload == {"status": "ok", "inference_policy": "miner-controlled"}
+
+
 def test_akash_inference_uses_direct_endpoint_not_bitsec_proxy(
     relay_and_upstream, akash_upstream, monkeypatch
 ) -> None:
@@ -755,8 +802,11 @@ def test_costs_endpoint_reports_measured_inference_spend(relay_and_upstream) -> 
 
     # Two inference calls; upstream reports 100 in / 20 out tokens each.
     for _ in range(2):
-        _post(base + "/inference", json.dumps({"messages": []}).encode(),
-              {"Content-Type": "application/json"})
+        _post(
+            base + "/inference",
+            json.dumps({"messages": []}).encode(),
+            {"Content-Type": "application/json"},
+        )
 
     costs = _get_json(base + "/costs")
     assert costs["requests"] == 2
@@ -773,8 +823,11 @@ def test_costs_endpoint_reports_measured_inference_spend(relay_and_upstream) -> 
 
 def test_costs_reset_zeroes_the_running_total(relay_and_upstream) -> None:
     base, _ = relay_and_upstream
-    _post(base + "/inference", json.dumps({"messages": []}).encode(),
-          {"Content-Type": "application/json"})
+    _post(
+        base + "/inference",
+        json.dumps({"messages": []}).encode(),
+        {"Content-Type": "application/json"},
+    )
     assert _get_json(base + "/costs")["input_tokens"] == 100
 
     _post(base + "/costs/reset", b"", _admin_headers({"Content-Type": "application/json"}))
@@ -787,8 +840,11 @@ def test_costs_reset_zeroes_the_running_total(relay_and_upstream) -> None:
 
 def test_costs_reset_requires_admin_token(relay_and_upstream) -> None:
     base, _ = relay_and_upstream
-    _post(base + "/inference", json.dumps({"messages": []}).encode(),
-          {"Content-Type": "application/json"})
+    _post(
+        base + "/inference",
+        json.dumps({"messages": []}).encode(),
+        {"Content-Type": "application/json"},
+    )
     assert _get_json(base + "/costs")["requests"] == 1
 
     with pytest.raises(HTTPError) as excinfo:

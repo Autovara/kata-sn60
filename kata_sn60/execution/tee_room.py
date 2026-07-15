@@ -18,6 +18,7 @@ with a fake verifier.
 Ported from the tested sealed-room spike (now generalized into kata-tee-runner). Gated behind
 KATA_SN60_USE_TEE_ROOM.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -198,8 +199,14 @@ class RoomResult:
 
 class RoomLauncher(Protocol):
     def launch_and_run(
-        self, *, candidate_id: str, agent_ref: str, project_key: str,
-        nonce: bytes, sealed_key_ref: str, bundle_sha256: str,
+        self,
+        *,
+        candidate_id: str,
+        agent_ref: str,
+        project_key: str,
+        nonce: bytes,
+        sealed_key_ref: str,
+        bundle_sha256: str,
     ) -> RoomResult: ...
 
 
@@ -225,8 +232,12 @@ def evaluate_candidate_in_room(
 ) -> CandidateOutcome:
     try:
         result = launcher.launch_and_run(
-            candidate_id=candidate_id, agent_ref=agent_ref, project_key=project_key,
-            nonce=nonce, sealed_key_ref=sealed_key_ref, bundle_sha256=bundle_sha256,
+            candidate_id=candidate_id,
+            agent_ref=agent_ref,
+            project_key=project_key,
+            nonce=nonce,
+            sealed_key_ref=sealed_key_ref,
+            bundle_sha256=bundle_sha256,
         )
     except Exception as exc:  # noqa: BLE001 - a room failure is a failed run, not a crash
         return CandidateOutcome(False, None, f"room run failed: {exc}")
@@ -234,9 +245,15 @@ def evaluate_candidate_in_room(
         return CandidateOutcome(False, None, "room returned a different candidate bundle hash")
 
     verdict = verify_room_run(
-        quote_hex=result.quote_hex, report=result.report, nonce=nonce,
-        project_key=project_key, bundle_sha256=bundle_sha256, provenance=result.provenance,
-        policy=policy, verifier=verifier, seen_nonces=seen_nonces,
+        quote_hex=result.quote_hex,
+        report=result.report,
+        nonce=nonce,
+        project_key=project_key,
+        bundle_sha256=bundle_sha256,
+        provenance=result.provenance,
+        policy=policy,
+        verifier=verifier,
+        seen_nonces=seen_nonces,
     )
     if not verdict.accepted:
         return CandidateOutcome(False, None, verdict.reason)
@@ -270,24 +287,33 @@ class HttpRoomLauncher:
         self.timeout = timeout
 
     def launch_and_run(
-        self, *, candidate_id: str, agent_ref: str, project_key: str,
-        nonce: bytes, sealed_key_ref: str, bundle_sha256: str,
+        self,
+        *,
+        candidate_id: str,
+        agent_ref: str,
+        project_key: str,
+        nonce: bytes,
+        sealed_key_ref: str,
+        bundle_sha256: str,
     ) -> RoomResult:
         issued_at = int(time.time())
         lifetime = int(os.environ.get("KATA_SN60_ROOM_REQUEST_LIFETIME_SECONDS", "900"))
         if not 1 <= lifetime <= 1_200:
             raise RuntimeError("KATA_SN60_ROOM_REQUEST_LIFETIME_SECONDS must be 1..1200")
-        payload = json.dumps({
-            "nonce": nonce.hex(),
-            "project_key": project_key,
-            "sealed_key": sealed_key_ref,
-            "bundle": _bundle_tar_b64(agent_ref),   # the miner's real agent, run in the room
-            "bundle_sha256": bundle_sha256,
-            "issued_at": issued_at,
-            "expires_at": issued_at + lifetime,
-        }).encode()
+        payload = json.dumps(
+            {
+                "nonce": nonce.hex(),
+                "project_key": project_key,
+                "sealed_key": sealed_key_ref,
+                "bundle": _bundle_tar_b64(agent_ref),  # the miner's real agent, run in the room
+                "bundle_sha256": bundle_sha256,
+                "issued_at": issued_at,
+                "expires_at": issued_at + lifetime,
+            }
+        ).encode()
         req = urllib.request.Request(
-            f"{self.base_url}/run", data=payload,
+            f"{self.base_url}/run",
+            data=payload,
             headers={
                 "Content-Type": "application/json",
                 ROOM_SIGNATURE_HEADER: room_signature(payload),

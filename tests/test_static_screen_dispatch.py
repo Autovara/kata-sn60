@@ -80,10 +80,7 @@ def test_static_screen_noop_for_unknown_or_missing_lane(tmp_path: Path) -> None:
     )
     # No repo_pack -> no dispatch at all.
     assert (
-        _plugin_static_screen_findings(
-            submission_root=tmp_path, repo_pack=None, mode="miner"
-        )
-        == []
+        _plugin_static_screen_findings(submission_root=tmp_path, repo_pack=None, mode="miner") == []
     )
 
 

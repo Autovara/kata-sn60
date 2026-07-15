@@ -46,22 +46,22 @@ VALID_MINER_AGENT = (
     "def agent_main(project_dir=None, inference_api=None):\n"
     "    source_hint = str(project_dir or '')\n"
     "    finding = {\n"
-    "        \"title\": \"Missing access control on privileged update\",\n"
-    "        \"description\": (\n"
-    "            \"A privileged state-changing function can be called by any \"\n"
-    "            \"account, allowing unauthorized changes to protected protocol settings.\"\n"
+    '        "title": "Missing access control on privileged update",\n'
+    '        "description": (\n'
+    '            "A privileged state-changing function can be called by any "\n'
+    '            "account, allowing unauthorized changes to protected protocol settings."\n'
     "        ) + source_hint[:0],\n"
-    "        \"severity\": \"high\",\n"
-    "        \"file\": \"contracts/Admin.sol\",\n"
+    '        "severity": "high",\n'
+    '        "file": "contracts/Admin.sol",\n'
     "    }\n"
     "    return {\n"
-    "        \"vulnerabilities\": [finding],\n"
+    '        "vulnerabilities": [finding],\n'
     "    }\n"
 )
 SEED_MINER_AGENT = (
     "def agent_main(project_dir=None, inference_api=None):\n"
     "    return {\n"
-    "        \"vulnerabilities\": [{\"title\": \"seed finding\"}],\n"
+    '        "vulnerabilities": [{"title": "seed finding"}],\n'
     "    }\n"
 )
 
@@ -203,7 +203,7 @@ def test_validate_submission_rejects_required_agent_main_args(tmp_path, monkeypa
     reasons = validation_reasons(
         tmp_path,
         monkeypatch,
-        agent_source="def agent_main(project_dir):\n    return {\"vulnerabilities\": []}\n",
+        agent_source='def agent_main(project_dir):\n    return {"vulnerabilities": []}\n',
     )
     assert any("no-argument invocation" in reason for reason in reasons)
 
@@ -225,8 +225,7 @@ def test_validate_submission_rejects_non_bitsec_report_contract(tmp_path, monkey
         tmp_path,
         monkeypatch,
         agent_source=(
-            "def agent_main(project_dir=None, inference_api=None):\n"
-            "    return {\"findings\": []}\n"
+            'def agent_main(project_dir=None, inference_api=None):\n    return {"findings": []}\n'
         ),
     )
     assert any("top-level `vulnerabilities`" in reason for reason in reasons)
@@ -261,8 +260,8 @@ def test_validate_submission_allows_miner_owned_provider_env_reference(
         agent_source=(
             "import os\n"
             "def agent_main(project_dir=None, inference_api=None):\n"
-            "    os.environ.get(\"OPENAI_API_KEY\")\n"
-            "    return {\"vulnerabilities\": []}\n"
+            '    os.environ.get("OPENAI_API_KEY")\n'
+            '    return {"vulnerabilities": []}\n'
         ),
     )
     assert not any("secret env vars" in reason for reason in reasons)
@@ -273,24 +272,22 @@ def test_validate_submission_rejects_hardcoded_secret(tmp_path, monkeypatch) -> 
         tmp_path,
         monkeypatch,
         agent_source=(
-            "KEY = \"sk-abcdefghijklmnop\"\n"
+            'KEY = "sk-abcdefghijklmnop"\n'
             "def agent_main(project_dir=None, inference_api=None):\n"
-            "    return {\"vulnerabilities\": []}\n"
+            '    return {"vulnerabilities": []}\n'
         ),
     )
     assert any("hardcoded secret" in reason for reason in reasons)
 
 
-def test_validate_submission_allows_sampling_override_source(
-    tmp_path, monkeypatch
-) -> None:
+def test_validate_submission_allows_sampling_override_source(tmp_path, monkeypatch) -> None:
     reasons = validation_reasons(
         tmp_path,
         monkeypatch,
         agent_source=(
             "def agent_main(project_dir=None, inference_api=None):\n"
             "    call(temperature=0.2)\n"
-            "    return {\"vulnerabilities\": []}\n"
+            '    return {"vulnerabilities": []}\n'
         ),
     )
     assert not any("sampling parameters" in reason for reason in reasons)
@@ -305,22 +302,20 @@ def test_validate_submission_allows_dict_unpack_sampling_override_source(
         agent_source=(
             "def agent_main(project_dir=None, inference_api=None):\n"
             "    call(**{'temperature': 0.2})\n"
-            "    return {\"vulnerabilities\": []}\n"
+            '    return {"vulnerabilities": []}\n'
         ),
     )
     assert not any("temperature" in reason for reason in reasons)
 
 
-def test_validate_submission_allows_miner_owned_provider_endpoint(
-    tmp_path, monkeypatch
-) -> None:
+def test_validate_submission_allows_miner_owned_provider_endpoint(tmp_path, monkeypatch) -> None:
     reasons = validation_reasons(
         tmp_path,
         monkeypatch,
         agent_source=(
-            "URL = \"https://api.openai.com/v1\"\n"
+            'URL = "https://api.openai.com/v1"\n'
             "def agent_main(project_dir=None, inference_api=None):\n"
-            "    return {\"vulnerabilities\": []}\n"
+            '    return {"vulnerabilities": []}\n'
         ),
     )
     assert not any("provider endpoints" in reason for reason in reasons)
@@ -336,9 +331,7 @@ def test_validate_submission_reports_malformed_metadata(tmp_path, monkeypatch) -
     assert result.reasons
 
 
-def test_validate_submission_reports_invalid_metadata_schema_type(
-    tmp_path, monkeypatch
-) -> None:
+def test_validate_submission_reports_invalid_metadata_schema_type(tmp_path, monkeypatch) -> None:
     _, repo_root, submission_root = make_miner_submission(tmp_path, monkeypatch)
     metadata_path = submission_root / "submission.json"
     payload = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -351,9 +344,7 @@ def test_validate_submission_reports_invalid_metadata_schema_type(
     assert any("invalid field" in reason for reason in result.reasons)
 
 
-def test_validate_submission_reports_invalid_manifest_schema_type(
-    tmp_path, monkeypatch
-) -> None:
+def test_validate_submission_reports_invalid_manifest_schema_type(tmp_path, monkeypatch) -> None:
     _, repo_root, submission_root = make_miner_submission(tmp_path, monkeypatch)
     manifest_path = submission_root / AGENT_MANIFEST_FILENAME
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -394,9 +385,7 @@ def test_inspect_pull_request_accepts_single_submission_scope(
 
 
 def test_decide_submission_action_merges_registry_winner(tmp_path, monkeypatch) -> None:
-    _, submission_root, _, summary_path = run_registry_lane_sn60_duel(
-        tmp_path, monkeypatch
-    )
+    _, submission_root, _, summary_path = run_registry_lane_sn60_duel(tmp_path, monkeypatch)
 
     decision = decide_submission_action(str(submission_root), str(summary_path))
 
@@ -570,8 +559,7 @@ def test_validate_submission_holds_replay_signals_when_review_enabled(
     assert result.screening_status == "review"
     assert result.screening_score == 6
     assert any(
-        "code4rena_secondswap_2025_02" in reason
-        for reason in result.screening_review_reasons
+        "code4rena_secondswap_2025_02" in reason for reason in result.screening_review_reasons
     )
     assert result.evaluator_id == "sn60_bitsec"
 
@@ -604,8 +592,7 @@ def test_validate_submission_keeps_replay_signals_report_only_by_default(
     assert result.screening_status == "pass"
     assert result.screening_score == 6
     assert any(
-        "code4rena_secondswap_2025_02" in reason
-        for reason in result.screening_review_reasons
+        "code4rena_secondswap_2025_02" in reason for reason in result.screening_review_reasons
     )
 
 
@@ -663,8 +650,7 @@ def test_validate_submission_rejects_known_answer_text_when_strict_enabled(
         "    'ValidationReplayContract knownFunctionName knownStorageSlot copied '\n"
         "    'benchmark answer text should be rejected when strict concrete replay '\n"
         "    'screening is enabled for production intake.'\n"
-        ")\n"
-        + VALID_MINER_AGENT,
+        ")\n" + VALID_MINER_AGENT,
         encoding="utf-8",
     )
 
@@ -1039,7 +1025,7 @@ def test_evaluate_submission_requires_seeded_king_for_registry_lane(
     with pytest.raises(ValueError, match="king artifact is not seeded"):
         evaluate_submission(
             str(submission_root),
-                sn60_project_keys=["project-a"],
+            sn60_project_keys=["project-a"],
         )
 
 
@@ -1144,15 +1130,15 @@ def test_promote_records_published_king_hash_for_non_normalized_agent(
         "def agent_main(project_dir=None, inference_api=None):\n"
         "    source_hint = str(project_dir or '')\n"
         "    finding = {\n"
-        "        \"title\": \"Missing access control on privileged update\",\n"
-        "        \"description\": (\n"
-        "            \"A privileged state-changing function can be called by any \"\n"
-        "            \"account, allowing unauthorized changes to protected protocol settings.\"\n"
+        '        "title": "Missing access control on privileged update",\n'
+        '        "description": (\n'
+        '            "A privileged state-changing function can be called by any "\n'
+        '            "account, allowing unauthorized changes to protected protocol settings."\n'
         "        ) + source_hint[:0],\n"
-        "        \"severity\": \"high\",\n"
-        "        \"file\": \"contracts/Admin.sol\",\n"
+        '        "severity": "high",\n'
+        '        "file": "contracts/Admin.sol",\n'
         "    }\n"
-        "    return {\"vulnerabilities\": [finding]}"  # no trailing newline
+        '    return {"vulnerabilities": [finding]}'  # no trailing newline
     )
     assert not non_normalized.endswith("\n")
 

@@ -3,7 +3,7 @@
 A working starting-point agent for the Kata SN60 sealed-room competition.
 
 ## What's here
-- `agent.py` — defines `agent_main()`, finds smart-contract source files, asks the pinned
+- `agent.py` — defines `agent_main()`, finds smart-contract source files, asks your chosen
   model to find vulnerabilities, and returns them. Improve it to win.
 
 ## The contract your agent must follow
@@ -18,8 +18,8 @@ def agent_main(project_dir=None, inference_api=None) -> dict:
 - The harness runs `agent_main()` against the project's code (`/app/project_code`) and
   scores your findings vs hidden ground truth.
 - Call the AI via `POST {inference_api}/inference` with header `x-inference-api-key` and
-  body `{"messages": [...], "max_tokens": N}` (no `model` — the relay pins it, paid by
-  your sealed key).
+  an OpenAI-compatible request body. Choose the `model`, sampling, token settings, and retry
+  behavior that your own key/provider supports; the relay forwards them unchanged.
 
 ## How to submit (two files in your PR)
 1. `agent.py` — this file (or your improved version).

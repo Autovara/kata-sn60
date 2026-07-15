@@ -1,9 +1,8 @@
-"""SN60 bitsec as a Kata subnet plugin (Phase 2 of the multi-subnet refactor).
+"""SN60 Bitsec implementation of Kata's subnet plugin contract.
 
-This wraps the existing ``kata_sn60.sn60_bitsec`` functions behind the
-:class:`SubnetPlugin` contract. It is pure delegation -- no scoring or behavior
-change -- so the golden characterization tests are unaffected. Nothing in the core
-calls this yet; Phase 3 routes the generic round orchestrator through it.
+The plugin owns every SN60-specific decision—benchmark selection, sealed execution,
+scoring, screening, promotion provenance, and CLI extensions—while Kata core remains
+subnet-neutral.
 """
 
 from __future__ import annotations
@@ -21,13 +20,13 @@ from kata.plugins.contract import (
     SubnetPlugin,
 )
 
+from kata_sn60.execution.policy import tee_execution_enabled
 from kata_sn60.sn60_bitsec import (
     Sn60EvaluationHook,
     Sn60ExecutionHook,
     Sn60ReplicaResult,
     Sn60SandboxSource,
     Sn60VariantSummary,
-    _sn60_use_tee_room,
     benchmark_version_key,
     build_cached_king_hooks,
     build_default_evaluation_hook,
@@ -36,6 +35,7 @@ from kata_sn60.sn60_bitsec import (
     resolve_sn60_sandbox_source,
     score_variant_on_projects,
     summarize_variant,
+    validate_sn60_project_keys,
 )
 from kata_sn60.validator_system.challenge import (
     SN60_MINER_LANE_ID,
@@ -96,11 +96,11 @@ class Sn60BitsecPlugin(SubnetPlugin):
 
     def environment_spec(self) -> EnvSpec:
         # SN60 agents run sealed except for the evaluator's inference gateway.
-        # Execution is the local sandbox unless the sealed-room (TEE) path is opted
-        # in (KATA_SN60_USE_TEE_ROOM); EnvSpec.execution selects the backend.
+        # Production is TEE-first so a miner's sealed credential is the only
+        # credential available. Local Docker execution is an explicit dev mode.
         return EnvSpec(
             network="relay_only",
-            execution="tee" if _sn60_use_tee_room() else "sandbox",
+            execution="tee" if tee_execution_enabled() else "sandbox",
         )
 
     def resolve_execution_hook(self, source: Sn60SandboxSource) -> Sn60ExecutionHook:
@@ -129,10 +129,18 @@ class Sn60BitsecPlugin(SubnetPlugin):
             benchmark_file=config.get("benchmark_file"),
             sandbox_commit=config.get("sandbox_commit"),
         )
-        return Sn60Problems(
-            project_keys=list(project_keys),
+        normalized_project_keys = list(project_keys)
+        validate_sn60_project_keys(
+            normalized_project_keys,
             sandbox_source=sandbox_source,
-            replicas_per_project=int(config.get("replicas_per_project", 1)),
+        )
+        replicas_per_project = int(config.get("replicas_per_project", 1))
+        if replicas_per_project <= 0:
+            raise ValueError("SN60 replicas_per_project must be positive.")
+        return Sn60Problems(
+            project_keys=normalized_project_keys,
+            sandbox_source=sandbox_source,
+            replicas_per_project=replicas_per_project,
             run_id=seed,
             round_cache_path=config.get("round_cache_path"),
         )
@@ -272,9 +280,7 @@ class Sn60BitsecPlugin(SubnetPlugin):
     def benchmark_is_current(self, *, lane_id, summary, public_root=None) -> bool:
         from kata_sn60.verify import sn60_benchmark_is_current
 
-        return sn60_benchmark_is_current(
-            lane_id=lane_id, summary=summary, public_root=public_root
-        )
+        return sn60_benchmark_is_current(lane_id=lane_id, summary=summary, public_root=public_root)
 
     def extra_verification_reasons(self, *, lane_id, summary, public_root=None) -> list[str]:
         from kata_sn60.verify import sn60_extra_verification_reasons

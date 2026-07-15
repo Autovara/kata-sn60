@@ -1,8 +1,7 @@
-"""SN60 single-duel evaluation -- the legacy ``kata submission evaluate`` path.
+"""SN60 single-duel evaluation for ``kata submission evaluate``.
 
-Moved out of the generic submission workflow so the platform stays subnet-blind. Trusted
-round winners are promoted without this duel (they skip it); it remains for the manual
-``submission evaluate`` CLI and its tests. Relocates to ``kata-sn60`` in Phase 3.
+The shared submission workflow dispatches here through the plugin contract, keeping
+Kata core independent from SN60's evaluator and challenge artifacts.
 """
 
 from __future__ import annotations

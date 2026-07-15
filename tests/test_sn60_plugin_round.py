@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from kata_sn60 import Sn60BitsecPlugin, run_sn60_plugin_round
 from kata_sn60.validator_system import run_sn60_round
 
@@ -193,9 +195,7 @@ def test_run_sn60_plugin_round_writes_board_progress(tmp_path: Path) -> None:
         "cand-b",
         "cand-c",
     }
-    assert all(
-        c["done"] == c["total"] and c["state"] == "done" for c in progress["candidates"]
-    )
+    assert all(c["done"] == c["total"] and c["state"] == "done" for c in progress["candidates"])
     winner = next(c for c in progress["candidates"] if c["submission_id"] == "cand-c")
     assert winner["aggregated_score"] == 0.75
     assert winner["beats_king"] is True
@@ -233,3 +233,66 @@ def test_run_sn60_plugin_round_no_winner_when_king_unbeaten(tmp_path: Path) -> N
     assert result.promotion_reason == "no candidate beat the current SN60 king"
     assert result.winner_challenge_summary_path is None
     assert result.entries[0].beats_king is False
+
+
+@pytest.mark.parametrize("submission_id", ["../escape", "nested/id", ".", " candidate"])
+def test_run_sn60_plugin_round_rejects_unsafe_submission_id(
+    tmp_path: Path, submission_id: str
+) -> None:
+    sandbox_root, benchmark_path, king_root, _specs, paths = _build_inputs(tmp_path)
+    execute, evaluate = _detection_hooks()
+
+    with pytest.raises(ValueError, match="path-safe identifier"):
+        run_sn60_plugin_round(
+            king_artifact_path=str(king_root),
+            candidates=[(submission_id, paths["cand-a"])],
+            config={
+                "sandbox_root": str(sandbox_root),
+                "benchmark_file": str(benchmark_path),
+                "sandbox_commit": "commit-safe-id",
+                "project_keys": ["project-alpha"],
+                "replicas_per_project": 1,
+            },
+            output_root=str(tmp_path / "generic"),
+            plugin=Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate),
+        )
+
+
+def test_run_sn60_plugin_round_rejects_duplicate_submission_ids(tmp_path: Path) -> None:
+    sandbox_root, benchmark_path, king_root, _specs, paths = _build_inputs(tmp_path)
+    execute, evaluate = _detection_hooks()
+
+    with pytest.raises(ValueError, match="Duplicate submission id"):
+        run_sn60_plugin_round(
+            king_artifact_path=str(king_root),
+            candidates=[("duplicate", paths["cand-a"]), ("duplicate", paths["cand-b"])],
+            config={
+                "sandbox_root": str(sandbox_root),
+                "benchmark_file": str(benchmark_path),
+                "sandbox_commit": "commit-duplicate",
+                "project_keys": ["project-alpha"],
+                "replicas_per_project": 1,
+            },
+            output_root=str(tmp_path / "generic"),
+            plugin=Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate),
+        )
+
+
+def test_run_sn60_plugin_round_rejects_unknown_project_key(tmp_path: Path) -> None:
+    sandbox_root, benchmark_path, king_root, _specs, paths = _build_inputs(tmp_path)
+    execute, evaluate = _detection_hooks()
+
+    with pytest.raises(ValueError, match="not present in the resolved benchmark snapshot"):
+        run_sn60_plugin_round(
+            king_artifact_path=str(king_root),
+            candidates=[("candidate", paths["cand-a"])],
+            config={
+                "sandbox_root": str(sandbox_root),
+                "benchmark_file": str(benchmark_path),
+                "sandbox_commit": "commit-project-key",
+                "project_keys": ["../../escape"],
+                "replicas_per_project": 1,
+            },
+            output_root=str(tmp_path / "generic"),
+            plugin=Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate),
+        )

@@ -1,4 +1,4 @@
-"""SN60 live-progress writer for the plugin-driven round (Phase 3b progress bridge).
+"""SN60 live-progress writer for plugin-driven rounds.
 
 The generic orchestrator emits subnet-agnostic :class:`ProgressUpdate`s; this writer
 folds them into the exact ``round-progress.json`` structure the dashboard reads today
@@ -83,9 +83,7 @@ class Sn60RoundProgress:
                 target[key] = value
         self._write()
 
-    def mark_screened_out(
-        self, label: str, *, screening_result: dict, snapshot: dict
-    ) -> None:
+    def mark_screened_out(self, label: str, *, screening_result: dict, snapshot: dict) -> None:
         """Mark a candidate that failed the execution screener as failed (not scored)."""
         entry = self._by_label.get(label)
         if entry is None:

@@ -73,13 +73,15 @@ key never leaves your machine — only this sealed file does (it's useless to an
 ## What happens in a round (so you know what to expect)
 1. The round locks the pending PRs.
 2. Your `agent.py` runs **inside the sealed room** against the secret problems, using **your
-   sealed key** to pay for the AI (model is pinned — everyone uses the same one).
+   sealed key** to pay for the AI. You choose the model and request settings supported by
+   your provider.
 3. The room returns your findings + a proof; Kata verifies it and scores your findings.
 4. Best score wins the round.
 
 ## Notes
 - **Your key is safe:** sealed so only the room opens it; the maintainer never sees it.
-- **Budget:** put only what you need on the key — each run is capped.
+- **Budget:** fund the key for the inference your agent chooses to use; the platform does not
+  impose a model, token, call, or retry cap.
 - **If the maintainer redeploys the room**, they publish a new URL + compose-hash → re-run
   `kata_seal.py` and update your `sealed_inference_key`.
 - Start from the sample `agent.py` in this folder and improve it (better prompts, prioritize

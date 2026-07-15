@@ -1,7 +1,7 @@
-"""SN60 benchmark-replay screening (anti-memorization): flag/reject copied benchmark answers.
+"""SN60 benchmark-replay screening for copied benchmark answers.
 
-Called by the generic screener via the plugin's ``benchmark_review`` seam so
-``screening_system/engine.py`` stays subnet-blind. Relocates to ``kata-sn60`` in Phase 3.
+Kata calls this through the plugin's ``benchmark_review`` hook, keeping the
+platform's shared screening engine subnet-neutral.
 """
 
 from __future__ import annotations
@@ -28,9 +28,7 @@ def sn60_benchmark_review(
     if strict:
         concrete = [f for f in review_findings if is_concrete_replay_finding(f)]
         reject_findings = _promote_replay_findings(concrete)
-        review_findings = [
-            f for f in review_findings if not is_concrete_replay_finding(f)
-        ]
+        review_findings = [f for f in review_findings if not is_concrete_replay_finding(f)]
     return reject_findings, review_findings, score
 
 
@@ -48,10 +46,7 @@ def _render_replay_rejection_reason(finding: ScreeningFinding) -> str:
     if detail.startswith("SN60 screening "):
         detail = detail.removeprefix("SN60 screening ").strip()
     if not detail:
-        detail = (
-            "concrete benchmark-specific replay evidence was found "
-            f"by `{finding.rule_id}`."
-        )
+        detail = f"concrete benchmark-specific replay evidence was found by `{finding.rule_id}`."
     return (
         "SN60 screening rejected hardcoded benchmark replay: "
         f"{detail} Remove benchmark IDs, known finding IDs, copied finding "

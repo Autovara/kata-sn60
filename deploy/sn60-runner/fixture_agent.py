@@ -5,6 +5,7 @@ REPORT_FILE. A real agent would analyze the problem by calling inference via
 INFERENCE_API using INFERENCE_API_KEY. This stub just emits a deterministic finding and
 records whether an inference key was delivered into the sealed room.
 """
+
 import json
 import os
 from pathlib import Path

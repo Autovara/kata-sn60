@@ -21,8 +21,8 @@ candidate-provided key for each job. There is no validator or deploy-time infere
 
 3. In Phala, deliver `KATA_ROOM_AUTH_SECRET`, `GHCR_USER`, and `GHCR_TOKEN` as sealed secrets.
    Set `KATA_SN60_TEE_IMAGE_DIGESTS_JSON` to a JSON object mapping every permitted Bitsec project
-   key to its GHCR `sha256:<digest>`. Configure the relay's direct provider and one non-empty
-   `KATA_RELAY_PINNED_MODEL`.
+   key to its GHCR `sha256:<digest>`. Configure the relay upstream/provider routes. The relay
+   forwards the miner's own key and requested model, sampling, token, and call settings unchanged.
 
 4. Set `KATA_ROOM_BIND_ADDRESS` to a private validator-reachable address. Keep the default loopback
    binding for local testing. Do not expose port 8080 to the internet; HMAC authentication is a

@@ -1,8 +1,7 @@
-"""SN60-specific challenge verification: benchmark currency + candidate-only checks.
+"""SN60-specific challenge freshness and candidate-only verification.
 
-Called by the generic verifier via the plugin's ``benchmark_is_current`` /
-``extra_verification_reasons`` seams so ``submission_system`` stays subnet-blind.
-Relocates to ``kata-sn60`` in Phase 3.
+Kata calls these through plugin verification hooks, leaving shared submission
+verification independent from SN60 benchmark details.
 """
 
 from __future__ import annotations

@@ -14,6 +14,7 @@ from typing import Callable
 
 from kata.util import dedupe, write_json
 
+from kata_sn60.execution.policy import tee_execution_enabled
 from kata_sn60.sn60_bitsec import (
     Sn60ReplicaContext,
     Sn60SandboxSource,
@@ -37,6 +38,7 @@ SOURCE_LOCATION_PATTERN = re.compile(
     r"\b[\w./-]+\.(?:sol|vy|rs|move|cairo|fe)\b",
     re.IGNORECASE,
 )
+
 
 @dataclass(frozen=True)
 class Sn60ScreeningResult:
@@ -157,9 +159,7 @@ def run_sn60_screening(
     run_root.mkdir(parents=True, exist_ok=False)
 
     artifact_hash = hash_bundle_root(artifact_root)
-    static_reasons = (
-        validate_sn60_static_screening(artifact_root) if run_static_checks else []
-    )
+    static_reasons = validate_sn60_static_screening(artifact_root) if run_static_checks else []
     if static_reasons:
         result = build_screening_result(
             run_id=run_id,
@@ -209,9 +209,7 @@ def run_sn60_screening(
     result = build_screening_result(
         run_id=run_id,
         status=(
-            SN60_SCREENING_STATUS_FAILED
-            if execution_reasons
-            else SN60_SCREENING_STATUS_PASSED
+            SN60_SCREENING_STATUS_FAILED if execution_reasons else SN60_SCREENING_STATUS_PASSED
         ),
         stage=SN60_SCREENING_STAGE_EXECUTION,
         artifact_root=artifact_root,
@@ -234,6 +232,7 @@ def run_sn60_screening(
 def build_default_screening_execution_hook(source: Sn60SandboxSource) -> Sn60ScreeningHook:
     return build_default_execution_hook(
         source,
+        use_tee=tee_execution_enabled(),
         timeout_env_name=SN60_SCREENING_TIMEOUT_ENV,
         timeout_default=DEFAULT_SN60_SCREENING_EXECUTION_TIMEOUT_SECONDS,
     )
@@ -318,8 +317,7 @@ def has_source_location_hint(finding: dict[str, object]) -> bool:
     if explicit_location:
         return True
     searchable = " ".join(
-        str(finding.get(key) or "")
-        for key in ("title", "description", "function", "contract")
+        str(finding.get(key) or "") for key in ("title", "description", "function", "contract")
     )
     return bool(SOURCE_LOCATION_PATTERN.search(searchable))
 
@@ -358,8 +356,6 @@ def build_screening_result(
 def write_screening_result(path: Path, result: Sn60ScreeningResult) -> Path:
     write_json(path, asdict(result))
     return path
-
-
 
 
 def screening_result_payload(result: Sn60ScreeningResult) -> dict[str, object]:

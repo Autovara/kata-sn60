@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from kata_sn60.sn60_bitsec import (
+    DEFAULT_SANDBOX_COMMIT,
     Sn60ReplicaContext,
     Sn60ReplicaResult,
     Sn60SandboxSource,
@@ -99,8 +100,7 @@ def test_run_sn60_bitsec_duel_stages_full_bundle_and_persists_outputs(tmp_path: 
                 "vulnerabilities": [
                     {
                         "title": (
-                            f"{context.variant_name}-"
-                            f"{context.project_key}-{context.replica_index}"
+                            f"{context.variant_name}-{context.project_key}-{context.replica_index}"
                         ),
                     }
                 ],
@@ -257,9 +257,7 @@ def test_duel_records_invalid_candidate_replica_and_continues(tmp_path: Path) ->
         ["king"] * 6 + ["candidate"] * 6
     )
     expected_units = {
-        (project, replica)
-        for project in ("project-alpha", "project-beta")
-        for replica in (1, 2, 3)
+        (project, replica) for project in ("project-alpha", "project-beta") for replica in (1, 2, 3)
     }
     assert {(p, r) for v, p, r in executed if v == "king"} == expected_units
     assert {(p, r) for v, p, r in executed if v == "candidate"} == expected_units
@@ -421,14 +419,10 @@ def test_sn60_synthetic_ids_are_distinct_and_stable(tmp_path: Path) -> None:
     king_r2 = sn60_synthetic_ids(
         _make_context(tmp_path, source, variant_name="king", replica_index=2)
     )
-    cand_r1 = sn60_synthetic_ids(
-        _make_context(tmp_path, source, variant_name="candidate")
-    )
+    cand_r1 = sn60_synthetic_ids(_make_context(tmp_path, source, variant_name="candidate"))
 
     # Stable for identical context.
-    assert king_r1 == sn60_synthetic_ids(
-        _make_context(tmp_path, source, variant_name="king")
-    )
+    assert king_r1 == sn60_synthetic_ids(_make_context(tmp_path, source, variant_name="king"))
     # Distinct job_run_id per replica; distinct agent_id per side.
     assert king_r1.job_run_id != king_r2.job_run_id
     assert king_r1.agent_id == king_r2.agent_id
@@ -436,10 +430,7 @@ def test_sn60_synthetic_ids_are_distinct_and_stable(tmp_path: Path) -> None:
     assert king_r1.job_run_id != cand_r1.job_run_id
     # King and candidate share the duel-level job_id.
     assert king_r1.job_id == cand_r1.job_id
-    assert all(
-        1 <= value < 2**31
-        for value in (*king_r1, *cand_r1)
-    )
+    assert all(1 <= value < 2**31 for value in (*king_r1, *cand_r1))
 
 
 def test_resolve_sn60_sandbox_source_rejects_mismatched_benchmark_filename(
@@ -457,6 +448,23 @@ def test_resolve_sn60_sandbox_source_rejects_mismatched_benchmark_filename(
             sandbox_commit="commit-1",
             scorer_version="ScaBenchScorerV2",
         )
+
+
+def test_resolve_sn60_sandbox_source_uses_the_production_default_commit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = write_sandbox_source(sandbox_root)
+    monkeypatch.delenv("KATA_SN60_SANDBOX_COMMIT", raising=False)
+
+    source = resolve_sn60_sandbox_source(
+        sandbox_root=str(sandbox_root),
+        benchmark_file=str(benchmark_path),
+        sandbox_commit=None,
+        scorer_version="ScaBenchScorerV2",
+    )
+
+    assert source.sandbox_commit == DEFAULT_SANDBOX_COMMIT
 
 
 def test_default_evaluation_hook_points_validator_dir_at_recorded_benchmark(
@@ -632,7 +640,7 @@ def _run_default_execution_hook_with_report(tmp_path, monkeypatch, source, repor
         "run",
         lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""),
     )
-    return sn60.build_default_execution_hook(source)(context)
+    return sn60.build_default_execution_hook(source, use_tee=False)(context)
 
 
 def test_default_execution_hook_marks_docker_run_failure_as_infrastructure_error(
@@ -666,7 +674,7 @@ def test_default_execution_hook_marks_docker_run_failure_as_infrastructure_error
         ),
     )
 
-    payload = sn60.build_default_execution_hook(source)(context)
+    payload = sn60.build_default_execution_hook(source, use_tee=False)(context)
 
     assert payload["success"] is False
     assert payload["infrastructure_error"] is True
@@ -1016,7 +1024,7 @@ def test_default_execution_hook_asserts_internal_network_and_uses_endpoint(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = build_default_execution_hook(source)(context)
+    result = build_default_execution_hook(source, use_tee=False)(context)
 
     assert result == {"success": True, "report": {"vulnerabilities": []}}
     # The internal-network guarantee runs before the agent container starts.
@@ -1027,9 +1035,7 @@ def test_default_execution_hook_asserts_internal_network_and_uses_endpoint(
     assert inference_env.startswith("INFERENCE_API=http://secret-proxy:9000/j/")
 
 
-def test_default_execution_hook_refuses_non_internal_network(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_default_execution_hook_refuses_non_internal_network(tmp_path: Path, monkeypatch) -> None:
     sandbox_root = tmp_path / "sandbox"
     benchmark_path = write_sandbox_source(sandbox_root)
     source = resolve_sn60_sandbox_source(
@@ -1053,7 +1059,7 @@ def test_default_execution_hook_refuses_non_internal_network(
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     with pytest.raises(ValueError, match="permits external egress"):
-        build_default_execution_hook(source)(context)
+        build_default_execution_hook(source, use_tee=False)(context)
 
     # Untrusted agent must never start on an egress-capable network.
     assert docker_ran["value"] is False
@@ -1090,6 +1096,7 @@ def test_default_execution_hook_removes_named_container_on_timeout(
 
     result = build_default_execution_hook(
         source,
+        use_tee=False,
         timeout_env_name="KATA_SN60_SCREENING_EXECUTION_TIMEOUT_SECONDS",
         timeout_default=300,
     )(context)
@@ -1266,7 +1273,7 @@ def test_extract_sn60_evaluation_payload_ignores_scorer_console_noise() -> None:
     noisy = (
         "╭── Scoring Project ──╮\n"
         "Checking: some expected vulnerability...\n"
-        'LLM Response: found=False, reason=The finding is a placeholder {not json}\n'
+        "LLM Response: found=False, reason=The finding is a placeholder {not json}\n"
         "✗ Missed (confidence=0.00)\n"
         '{"status": "Status.SUCCESS", "result": {"true_positives": 2, "total_expected": 9}}'
     )
@@ -1346,8 +1353,13 @@ def test_duel_caches_king_and_skips_rerun_on_second_duel(tmp_path: Path) -> None
     hooks = _counting_duel_hooks()
     calls = hooks[0]
     first = _run_cached_duel(
-        tmp_path=tmp_path, king_root=king_root, candidate_root=candidate_root,
-        benchmark_path=benchmark_path, keys=keys, scoreboard=scoreboard, hooks=hooks,
+        tmp_path=tmp_path,
+        king_root=king_root,
+        candidate_root=candidate_root,
+        benchmark_path=benchmark_path,
+        keys=keys,
+        scoreboard=scoreboard,
+        hooks=hooks,
     )
     # First duel: the king is uncached, so it runs on every project.
     assert {project for variant, project, _ in calls if variant == "king"} == set(keys)
@@ -1355,8 +1367,13 @@ def test_duel_caches_king_and_skips_rerun_on_second_duel(tmp_path: Path) -> None
 
     calls.clear()
     second = _run_cached_duel(
-        tmp_path=tmp_path, king_root=king_root, candidate_root=candidate_root,
-        benchmark_path=benchmark_path, keys=keys, scoreboard=scoreboard, hooks=hooks,
+        tmp_path=tmp_path,
+        king_root=king_root,
+        candidate_root=candidate_root,
+        benchmark_path=benchmark_path,
+        keys=keys,
+        scoreboard=scoreboard,
+        hooks=hooks,
     )
     # Second duel: the king is served from cache (not re-run); the candidate still runs.
     assert [c for c in calls if c[0] == "king"] == []
@@ -1380,16 +1397,26 @@ def test_duel_king_cache_recomputes_when_king_changes(tmp_path: Path) -> None:
     hooks = _counting_duel_hooks()
     calls = hooks[0]
     _run_cached_duel(
-        tmp_path=tmp_path, king_root=king_root, candidate_root=candidate_root,
-        benchmark_path=benchmark_path, keys=keys, scoreboard=scoreboard, hooks=hooks,
+        tmp_path=tmp_path,
+        king_root=king_root,
+        candidate_root=candidate_root,
+        benchmark_path=benchmark_path,
+        keys=keys,
+        scoreboard=scoreboard,
+        hooks=hooks,
     )
 
     # A new king (different bundle hash) must not reuse the old king's cached score.
     write_bundle(king_root, agent_source="def agent_main():\n    return {'changed': True}\n")
     calls.clear()
     _run_cached_duel(
-        tmp_path=tmp_path, king_root=king_root, candidate_root=candidate_root,
-        benchmark_path=benchmark_path, keys=keys, scoreboard=scoreboard, hooks=hooks,
+        tmp_path=tmp_path,
+        king_root=king_root,
+        candidate_root=candidate_root,
+        benchmark_path=benchmark_path,
+        keys=keys,
+        scoreboard=scoreboard,
+        hooks=hooks,
     )
     assert {project for variant, project, _ in calls if variant == "king"} == set(keys)
 
@@ -1407,8 +1434,13 @@ def test_duel_king_cache_recomputes_when_benchmark_changes(tmp_path: Path) -> No
     hooks = _counting_duel_hooks()
     calls = hooks[0]
     _run_cached_duel(
-        tmp_path=tmp_path, king_root=king_root, candidate_root=candidate_root,
-        benchmark_path=benchmark_path, keys=keys, scoreboard=scoreboard, hooks=hooks,
+        tmp_path=tmp_path,
+        king_root=king_root,
+        candidate_root=candidate_root,
+        benchmark_path=benchmark_path,
+        keys=keys,
+        scoreboard=scoreboard,
+        hooks=hooks,
     )
 
     # An edited benchmark (different content hash) must force the king to recompute.
@@ -1418,8 +1450,13 @@ def test_duel_king_cache_recomputes_when_benchmark_changes(tmp_path: Path) -> No
     )
     calls.clear()
     _run_cached_duel(
-        tmp_path=tmp_path, king_root=king_root, candidate_root=candidate_root,
-        benchmark_path=benchmark_path, keys=keys, scoreboard=scoreboard, hooks=hooks,
+        tmp_path=tmp_path,
+        king_root=king_root,
+        candidate_root=candidate_root,
+        benchmark_path=benchmark_path,
+        keys=keys,
+        scoreboard=scoreboard,
+        hooks=hooks,
     )
     assert {project for variant, project, _ in calls if variant == "king"} == set(keys)
 

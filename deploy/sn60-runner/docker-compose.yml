@@ -26,14 +26,14 @@ services:
       - GHCR_TOKEN=${GHCR_TOKEN}
       # JSON map: each allowed project key -> sha256:<64 hex>. There is no :latest fallback.
       - KATA_SN60_TEE_IMAGE_DIGESTS_JSON=${KATA_SN60_TEE_IMAGE_DIGESTS_JSON}
-      # --- in-room model-pinning relay (real, fair inference) ---
-      # The relay forwards the miner's key DIRECTLY to a provider. Point it at a provider
-      # serving the pinned model; e.g. AkashML + qwen3.6.
+      # --- in-room miner-funded inference relay ---
+      # The relay forwards the miner's key and request without setting a model,
+      # sampling policy, token budget, call budget, or retry budget.
+      - KATA_RELAY_UPSTREAM=${KATA_RELAY_UPSTREAM}
       - KATA_RELAY_DIRECT_UPSTREAM=${KATA_RELAY_DIRECT_UPSTREAM}
-      - KATA_RELAY_DIRECT_MODEL=${KATA_RELAY_DIRECT_MODEL}
-      - KATA_RELAY_PINNED_MODEL=${KATA_RELAY_PINNED_MODEL}
       - KATA_RELAY_DIRECT_KEY_PREFIXES=${KATA_RELAY_DIRECT_KEY_PREFIXES}
       - KATA_RELAY_DIRECT_ALLOW_UNKNOWN=${KATA_RELAY_DIRECT_ALLOW_UNKNOWN}
+      - KATA_RELAY_ENFORCE_PLATFORM_POLICY=false
     volumes:
       # dstack guest-agent socket -- lets the app call get_quote.
       - /var/run/dstack.sock:/var/run/dstack.sock

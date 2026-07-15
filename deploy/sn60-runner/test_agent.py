@@ -6,6 +6,7 @@ The bitsec problem image's harness (run_sandbox.py) imports the mounted agent an
 (ignores the project + inference) -- enough to prove the room runs the real problem
 harness end to end. A real round mounts the miner's own agent here.
 """
+
 from __future__ import annotations
 
 

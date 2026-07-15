@@ -1,9 +1,7 @@
-"""SN60 command-line surface: round arguments, config, and result rendering.
+"""SN60 command-line extensions for rounds, submissions, and proof baselines.
 
-Contributed to the generic ``kata round`` command through the SN60 plugin's CLI seams so
-``kata/interfaces/cli.py`` stays subnet-blind. The argument names and JSON shape are a
-contract with kata-bot's round runner, so they are moved here verbatim. Relocates to
-``kata-sn60`` in Phase 3.
+The plugin contributes these commands to the generic ``kata`` CLI without adding
+SN60-specific parser or output code to Kata core.
 """
 
 from __future__ import annotations
@@ -49,9 +47,7 @@ def sn60_round_result_json(result) -> dict:
     runs_per_project = result.replicas_per_project
     return {
         "run_id": result.run_id,
-        "round_summary_path": str(
-            (Path(result.output_root) / "round_summary.json").resolve()
-        ),
+        "round_summary_path": str((Path(result.output_root) / "round_summary.json").resolve()),
         "winner_submission_id": result.winner_submission_id,
         "winner_challenge_summary_path": result.winner_challenge_summary_path,
         "promotion_ready": result.promotion_ready,

@@ -22,6 +22,8 @@ from kata.state.lanes import (
 )
 from kata.state.progress import update_live_status
 
+from kata_sn60.execution.policy import tee_execution_enabled
+from kata_sn60.round_inputs import validate_round_candidates
 from kata_sn60.sn60_bitsec import (
     DEFAULT_EVAL_MAX_VULNS,
     DEFAULT_REPLICAS_PER_PROJECT,
@@ -301,9 +303,7 @@ def run_sn60_challenge(
     if screening_result:
         screening_context["caller_context"] = screening_result
     if execution_screening is not None:
-        screening_context["screener_project"] = screening_result_payload(
-            execution_screening
-        )
+        screening_context["screener_project"] = screening_result_payload(execution_screening)
     if screening_context:
         effective_screening_result["details"] = {
             **dict(effective_screening_result.get("details") or {}),
@@ -740,9 +740,7 @@ def write_sn60_round_summary(path: Path, result: Sn60RoundResult) -> None:
     payload = asdict(result)
     payload["validator_replica_count"] = 1
     payload["runs_per_project"] = result.replicas_per_project
-    payload["project_pass_threshold"] = project_pass_threshold_label(
-        result.replicas_per_project
-    )
+    payload["project_pass_threshold"] = project_pass_threshold_label(result.replicas_per_project)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -754,9 +752,7 @@ def write_sn60_baseline_summary(path: Path, result: Sn60BaselineResult) -> None:
     payload = asdict(result)
     payload["validator_replica_count"] = 1
     payload["runs_per_project"] = result.replicas_per_project
-    payload["project_pass_threshold"] = project_pass_threshold_label(
-        result.replicas_per_project
-    )
+    payload["project_pass_threshold"] = project_pass_threshold_label(result.replicas_per_project)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -794,9 +790,7 @@ def _sn60_variant_progress(summary: Sn60VariantSummary) -> dict[str, object]:
     }
 
 
-def _write_progress_atomic(
-    progress: dict[str, object], progress_path: str | None
-) -> None:
+def _write_progress_atomic(progress: dict[str, object], progress_path: str | None) -> None:
     """Write the live round-progress file atomically.
 
     The dashboard polls this file, and problems now finish in bursts, so a plain
@@ -809,9 +803,7 @@ def _write_progress_atomic(
     path = Path(progress_path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f"{path.name}.tmp")
-    tmp_path.write_text(
-        json.dumps(progress, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    tmp_path.write_text(json.dumps(progress, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp_path, path)
 
 
@@ -880,13 +872,7 @@ def run_sn60_round(
     regardless of how many candidates compete. The winner is the highest-ranked
     candidate that strictly beats the king; ties keep the king (no winner).
     """
-    if not candidates:
-        raise ValueError("SN60 round requires at least one candidate.")
-    seen_ids: set[str] = set()
-    for submission_id, _ in candidates:
-        if submission_id in seen_ids:
-            raise ValueError(f"Duplicate submission id in SN60 round: {submission_id}")
-        seen_ids.add(submission_id)
+    candidates = validate_round_candidates(candidates)
     if candidate_only:
         return run_sn60_candidate_only_round(
             king_artifact_path=king_artifact_path,
@@ -908,9 +894,7 @@ def run_sn60_round(
 
     # Routed through the generic orchestrator; SN60-specific scoring, the
     # execution screener and live progress live in the SN60 plugin package.
-    plugin = Sn60BitsecPlugin(
-        execution_hook=execution_hook, evaluation_hook=evaluation_hook
-    )
+    plugin = Sn60BitsecPlugin(execution_hook=execution_hook, evaluation_hook=evaluation_hook)
     return run_sn60_plugin_round(
         king_artifact_path=king_artifact_path,
         candidates=candidates,
@@ -956,9 +940,7 @@ def run_sn60_candidate_only_round(
     from kata_sn60.plugin import Sn60BitsecPlugin
     from kata_sn60.round import run_sn60_plugin_round
 
-    plugin = Sn60BitsecPlugin(
-        execution_hook=execution_hook, evaluation_hook=evaluation_hook
-    )
+    plugin = Sn60BitsecPlugin(execution_hook=execution_hook, evaluation_hook=evaluation_hook)
     return run_sn60_plugin_round(
         king_artifact_path=king_artifact_path,
         candidates=candidates,
@@ -1025,7 +1007,8 @@ def run_sn60_baseline_only(
         project_keys=project_keys,
         replicas_per_project=replicas_per_project,
         sandbox_source=source,
-        execution_hook=execution_hook or build_default_execution_hook(source),
+        execution_hook=execution_hook
+        or build_default_execution_hook(source, use_tee=tee_execution_enabled()),
         evaluation_hook=evaluation_hook or build_default_evaluation_hook(source),
         eval_max_vulns=DEFAULT_EVAL_MAX_VULNS,
         progress_callback=None,
@@ -1171,9 +1154,7 @@ def record_sn60_screening_failure_provenance(
                 "scorer_version": screening.sandbox_source.scorer_version,
                 "validator_replica_count": 1,
                 "runs_per_project": replicas_per_project,
-                "project_pass_threshold": project_pass_threshold_label(
-                    replicas_per_project
-                ),
+                "project_pass_threshold": project_pass_threshold_label(replicas_per_project),
             },
             local_replica_scores={"king": [], "candidate": []},
             pass_counts={"king": 0, "candidate": 0},
@@ -1202,9 +1183,7 @@ def sn60_final_metrics(
         "promotion_reason": decision.reason,
         "validator_replica_count": 1,
         "runs_per_project": duel_summary.replicas_per_project,
-        "project_pass_threshold": project_pass_threshold_label(
-            duel_summary.replicas_per_project
-        ),
+        "project_pass_threshold": project_pass_threshold_label(duel_summary.replicas_per_project),
         "king_sn60_pass_score": king_pass_score,
         "candidate_sn60_pass_score": candidate_pass_score,
         "candidate_sn60_pass_score_delta": candidate_pass_score - king_pass_score,
@@ -1368,8 +1347,7 @@ def render_pool(pool: ChallengePoolSummary) -> list[str]:
             f"- {variant_name} invalid runs: {pool.variant_invalid_runs.get(variant_name, 0)}"
         )
         lines.append(
-            f"- {variant_name} SN60 pass score: "
-            f"{pool.variant_scores.get(variant_name, 0.0):.2f}"
+            f"- {variant_name} SN60 pass score: {pool.variant_scores.get(variant_name, 0.0):.2f}"
         )
         if variant_name in pool.variant_detection_scores:
             lines.append(

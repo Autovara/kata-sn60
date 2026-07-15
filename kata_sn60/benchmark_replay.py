@@ -61,9 +61,7 @@ SOURCE_LINE_PROBE_MIN_COUNT = 3
 # Exact-substring string methods (regex methods are intentionally excluded --
 # fuzzy structural regexes are a weaker, separate signal and prone to false
 # positives against legitimate generic detectors).
-EXACT_MATCH_STR_METHODS = frozenset(
-    {"find", "index", "rfind", "count", "startswith", "endswith"}
-)
+EXACT_MATCH_STR_METHODS = frozenset({"find", "index", "rfind", "count", "startswith", "endswith"})
 REGEX_CALL_ATTRS = frozenset(
     {"search", "match", "fullmatch", "findall", "finditer", "sub", "subn", "split", "compile"}
 )
@@ -350,9 +348,7 @@ def finding_call_text_chars(node: ast.Call) -> int:
     return total
 
 
-def find_hardcoded_source_line_probes(
-    relative_path: str, content: str
-) -> list[ScreeningFinding]:
+def find_hardcoded_source_line_probes(relative_path: str, content: str) -> list[ScreeningFinding]:
     try:
         tree = ast.parse(content, filename=relative_path)
     except SyntaxError:
@@ -575,9 +571,7 @@ def vulnerability_dict_text_chars(node: ast.Dict) -> int:
 
 
 def dict_has_key(node: ast.Dict, key_name: str) -> bool:
-    return any(
-        isinstance(key, ast.Constant) and key.value == key_name for key in node.keys
-    )
+    return any(isinstance(key, ast.Constant) and key.value == key_name for key in node.keys)
 
 
 def fingerprint_hashes_from_node(node: ast.AST) -> set[str]:
@@ -585,8 +579,7 @@ def fingerprint_hashes_from_node(node: ast.AST) -> set[str]:
     for child in ast.walk(node):
         if isinstance(child, ast.Constant) and isinstance(child.value, str):
             hashes.update(
-                hash_fingerprint_token(token)
-                for token in fingerprint_tokens(child.value)
+                hash_fingerprint_token(token) for token in fingerprint_tokens(child.value)
             )
     return hashes
 
@@ -686,11 +679,7 @@ def resolve_benchmark_file() -> Path | None:
         return path if path.exists() else None
     env_root = os.environ.get(SN60_SANDBOX_ROOT_ENV)
     if env_root and env_root.strip():
-        path = (
-            Path(env_root).expanduser().resolve()
-            / "validator"
-            / DEFAULT_SN60_BENCHMARK_FILENAME
-        )
+        path = Path(env_root).expanduser().resolve() / "validator" / DEFAULT_SN60_BENCHMARK_FILENAME
         return path if path.exists() else None
     workspace_sandbox = (
         Path(__file__).resolve().parents[3]

@@ -1,27 +1,21 @@
-"""Validator SN60 model-pinning inference relay.
+"""Miner-funded inference relay for sealed SN60 execution.
 
 Untrusted miner agents run inside an internet-blocked Docker network, so the only
 way they can reach an LLM is through the inference endpoint Kata hands them via
-``KATA_SN60_INFERENCE_API``. Point that variable at this relay and it forces every
-inference request onto a single pinned model before forwarding to the real Bitsec
-proxy. That protects the validator two ways at once:
+``KATA_SN60_INFERENCE_API``. The relay forwards the miner's request and credential
+to the configured provider while keeping the agent on an internal network. The
+validator never receives or pays with a platform inference key.
 
-* **Cost** — a miner cannot spend the validator's inference budget on a costlier
-  model; the model is overwritten no matter what the agent's code asked for.
-* **Fairness** — king and candidate are guaranteed to duel on the same model
-  and cannot override sampling parameters through runtime request bodies.
+By default the relay preserves the miner's requested model, sampling settings,
+token settings, and number of calls. ``KATA_RELAY_ENFORCE_PLATFORM_POLICY=1`` is
+an explicit legacy mode for a validator-funded environment; only that mode pins a
+model, removes sampling fields, and enables request budgets.
 
-Enforcement happens on the actual API call, not by scanning source, so runtime or
-obfuscated model strings cannot bypass it: the internal network gives the agent no
-other route to a provider. Only ``POST /inference`` is forwarded upstream; relay
-health/cost endpoints are answered locally.
-
-The module has no third-party dependencies (kata ships none) and is meant to run as
-a small sidecar container on the agent network:
+The module has no third-party dependencies and runs as a small sidecar container
+on the agent network:
 
     docker run --rm --name kata_model_relay --network bitsec-net \\
         -e KATA_RELAY_UPSTREAM=http://bitsec_proxy:8000 \\
-        -e KATA_RELAY_PINNED_MODEL=qwen/qwen3.6-35b-a3b \\
         kata-sn60-model-relay
 
 Then start the validator with ``KATA_SN60_INFERENCE_API=http://kata_model_relay:8000``.
@@ -46,49 +40,31 @@ DEFAULT_DIRECT_PINNED_MODEL = "Qwen/Qwen3.6-35B-A3B"
 DEFAULT_DIRECT_UPSTREAM = "https://api.akashml.com/v1/chat/completions"
 DEFAULT_TIMEOUT_SECONDS = 900
 
-# Default qwen/qwen3.6-35b-a3b prices (USD per 1M tokens); override via env.
+# Legacy operator-funded pricing defaults (USD per 1M tokens); override via env.
 DEFAULT_PRICE_INPUT_PER_M = 0.14
 DEFAULT_PRICE_OUTPUT_PER_M = 1.00
 
-# qwen3.6 is a reasoning model: on a real (large) codebase it emits thousands of
-# reasoning tokens *before* the answer, so a small ``max_tokens`` truncates the
-# completion mid-reasoning (finish_reason=length). The upstream proxy then rejects
-# that as "response unusable" (HTTP 502), which the agent sees as an inference
-# failure -> the candidate evaluation is marked invalid and every PR loses. But
-# turning reasoning *off* makes detection too shallow (0 findings on real audits).
-# The fix is to give the model enough room to both think and answer: the relay
-# forces ``max_tokens`` up to this ceiling. It is a cap, not a target -- the model
-# stops at finish_reason=stop long before it, so cost tracks actual usage.
+# Legacy operator-funded output-token ceiling. It is only applied when
+# ``KATA_RELAY_ENFORCE_PLATFORM_POLICY=1``.
 DEFAULT_MAX_OUTPUT_TOKENS = 32000
 
-# Per-agent inference budget. The validator funds every token, and candidates
-# submit arbitrary agents, so each agent run gets a hard cap: once it exhausts
-# its input-token, output-token, OR call budget for the current problem it is
-# refused further inference and must finalize with what it found.
-# Per-agent budget, keyed per problem via the `/j/<token>/inference` path Kata
-# sets (see AgentBudget). Each agent may make up to CALL_BUDGET successful model
-# calls per problem, at most INPUT_TOKEN_BUDGET input tokens, and at most
-# TOKEN_BUDGET output tokens, whichever is reached first (further calls -> HTTP
-# 429). Failed calls are not counted, so a transient failure can be retried.
-# Individual calls are also clamped to
-# KATA_RELAY_MAX_OUTPUT_TOKENS.
+# Legacy operator-funded per-agent limits. They are inactive in the default
+# miner-funded mode, where the miner supplies and pays for its own credential.
 DEFAULT_AGENT_INPUT_TOKEN_BUDGET = 150000
 DEFAULT_AGENT_TOKEN_BUDGET = 24000
 DEFAULT_AGENT_CALL_BUDGET = 3
 
-# Only this path carries a model to overwrite; everything else is forwarded as-is.
+POLICY_ENFORCEMENT_ENV = "KATA_RELAY_ENFORCE_PLATFORM_POLICY"
+
+# The only endpoint agents may use to reach their inference provider.
 INFERENCE_PATH = "/inference"
 # Answered by the relay itself so operators can prove the process is up without
 # depending on the upstream proxy.
 HEALTH_PATH = "/healthz"
-# Actively probes the upstream model provider with one tiny pinned request so a
-# caller can tell whether inference genuinely works (e.g. the OpenRouter key is
-# not exhausted) BEFORE spending a round's worth of tokens. Unlike /inference it
-# does not force max_tokens up, so the probe is cheap and fast.
+# Lets an operator probe the upstream provider before starting a round. It is
+# admin-protected because it deliberately spends the supplied inference key.
 UPSTREAM_CHECK_PATH = "/healthz/upstream"
-# Output-token ceiling for the upstream probe. Big enough that the reasoning model
-# finishes a trivial reply (so a healthy provider returns 200), small enough to be
-# cheap and fast (~2s).
+# Output-token ceiling for the inexpensive upstream probe.
 HEALTHCHECK_MAX_TOKENS = 2000
 # Relay-local cost accounting: read the running total, or zero it before a PR.
 COST_PATH = "/costs"
@@ -142,6 +118,11 @@ DEFAULT_DIRECT_AUTH_HEADER = "Authorization"
 DEFAULT_DIRECT_AUTH_VALUE_TEMPLATE = "Bearer {api_key}"
 
 
+def platform_policy_enforced() -> bool:
+    """Whether the legacy validator-funded inference restrictions are enabled."""
+    return _env_truthy(POLICY_ENFORCEMENT_ENV)
+
+
 class RelayConfigurationError(Exception):
     """Operator-controlled relay configuration is incomplete or invalid."""
 
@@ -149,7 +130,9 @@ class RelayConfigurationError(Exception):
 @dataclass(frozen=True)
 class DirectProviderConfig:
     upstream: str
-    model: str
+    # Only used when the explicit legacy platform-policy mode is enabled.
+    # Miner-funded forwarding preserves the model in the agent request.
+    model: str = ""
     auth_header: str = DEFAULT_DIRECT_AUTH_HEADER
     auth_value_template: str = DEFAULT_DIRECT_AUTH_VALUE_TEMPLATE
 
@@ -184,11 +167,8 @@ def _env_truthy(name: str) -> bool:
 def _direct_env_config() -> DirectProviderConfig:
     upstream = os.environ.get("KATA_RELAY_DIRECT_UPSTREAM", "").strip()
     model = os.environ.get("KATA_RELAY_DIRECT_MODEL", "").strip()
-    if not upstream or not model:
-        raise RelayConfigurationError(
-            "direct provider routing requires KATA_RELAY_DIRECT_UPSTREAM and "
-            "KATA_RELAY_DIRECT_MODEL"
-        )
+    if not upstream:
+        raise RelayConfigurationError("direct provider routing requires KATA_RELAY_DIRECT_UPSTREAM")
     return DirectProviderConfig(
         upstream=upstream,
         model=model,
@@ -207,10 +187,10 @@ def resolve_direct_provider(api_key: str | None) -> DirectProviderConfig | None:
 
       KATA_RELAY_DIRECT_KEY_PREFIXES=abc-,xyz_
       KATA_RELAY_DIRECT_UPSTREAM=https://provider.example/v1/chat/completions
-      KATA_RELAY_DIRECT_MODEL=Provider/Model
 
     Use "*" as a prefix only when every non-proxy inference key should use the
-    configured direct provider.
+    configured direct provider. ``KATA_RELAY_DIRECT_MODEL`` is only needed for
+    the explicit legacy operator-funded policy.
     """
     if not api_key or is_proxy_api_key(api_key):
         return None
@@ -239,7 +219,7 @@ def resolve_upstream() -> str:
 
 
 def resolve_pinned_model(api_key: str | None = None) -> str:
-    """The single model every inference request is forced onto."""
+    """Resolve the model for explicit legacy operator-policy mode only."""
     value = os.environ.get("KATA_RELAY_PINNED_MODEL")
     if value and value.strip() and value.strip() != DEFAULT_PINNED_MODEL:
         return value.strip()
@@ -247,7 +227,7 @@ def resolve_pinned_model(api_key: str | None = None) -> str:
         direct_provider = resolve_direct_provider(api_key)
     except RelayConfigurationError:
         direct_provider = None
-    if direct_provider is not None:
+    if direct_provider is not None and direct_provider.model:
         return direct_provider.model
     if value and value.strip():
         return value.strip()
@@ -333,12 +313,12 @@ def _resolve_price(env_var: str, default: float) -> float:
 
 
 def resolve_price_input() -> float:
-    """USD per 1M input tokens (defaults to the qwen input price)."""
+    """USD per 1M input tokens for relay accounting."""
     return _resolve_price("KATA_RELAY_PRICE_INPUT_PER_M", DEFAULT_PRICE_INPUT_PER_M)
 
 
 def resolve_price_output() -> float:
-    """USD per 1M output tokens (defaults to the qwen output price)."""
+    """USD per 1M output tokens for relay accounting."""
     return _resolve_price("KATA_RELAY_PRICE_OUTPUT_PER_M", DEFAULT_PRICE_OUTPUT_PER_M)
 
 
@@ -422,12 +402,12 @@ class CostMeter:
             "usd_input": usd_input,
             "usd_output": usd_output,
             "usd_total": round(usd_input + usd_output, 6),
-            "model": resolve_pinned_model(),
+            "model": resolve_pinned_model() if platform_policy_enforced() else None,
         }
 
 
-# Process-wide meter shared across handler threads. Covers only agent inference
-# (qwen) — scoring runs on a separate proxy endpoint that never reaches the relay.
+# Process-wide meter shared across handler threads. It covers agent inference;
+# scoring runs on a separate proxy endpoint that never reaches this relay.
 COST_METER = CostMeter()
 
 
@@ -498,15 +478,12 @@ AGENT_BUDGET = AgentBudget()
 
 
 def pin_model_in_body(body: bytes, model: str, max_output_tokens: int = 0) -> bytes:
-    """Force the OpenAI-compatible request body onto ``model``.
+    """Apply the explicit legacy operator-funded request policy.
 
     A body we cannot read as a JSON object is returned untouched: the upstream
-    proxy is the authority on request validity. For JSON objects, remove
-    miner-controlled sampling knobs so fairness is enforced at the real network
-    boundary, not only by static source checks, and raise ``max_tokens`` up to
-    ``max_output_tokens`` (when > 0) so the pinned reasoning model has room to
-    both reason and emit its answer -- a small cap truncates it mid-reasoning and
-    the proxy rejects the unusable, length-finished response.
+    proxy is the authority on request validity. For JSON objects, it pins the
+    model, removes sampling controls, and clamps output tokens. Default
+    miner-funded forwarding never calls this function.
     """
     try:
         payload = json.loads(body)
@@ -525,14 +502,22 @@ def pin_model_in_body(body: bytes, model: str, max_output_tokens: int = 0) -> by
     return json.dumps(payload).encode("utf-8")
 
 
-class ModelPinningRelayHandler(BaseHTTPRequestHandler):
+class MinerInferenceRelayHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     # -- request entry points -------------------------------------------------
     def do_GET(self) -> None:
         path = self._path_without_query()
         if path == HEALTH_PATH:
-            self._send_json(200, {"status": "ok", "pinned_model": resolve_pinned_model()})
+            payload = {
+                "status": "ok",
+                "inference_policy": (
+                    "operator-pinned" if platform_policy_enforced() else "miner-controlled"
+                ),
+            }
+            if platform_policy_enforced():
+                payload["pinned_model"] = resolve_pinned_model()
+            self._send_json(200, payload)
             return
         if path == COST_PATH:
             self._send_json(200, COST_METER.snapshot(resolve_price_input(), resolve_price_output()))
@@ -559,17 +544,15 @@ class ModelPinningRelayHandler(BaseHTTPRequestHandler):
         self._forward("POST")
 
     def _handle_upstream_check(self) -> None:
-        """Send one tiny pinned request upstream and report whether it succeeded.
+        """Send one small diagnostic request upstream and report whether it worked.
 
         Returns 200 with ``{"ok": bool, "status": <upstream status>, "detail": ...}``
         so a caller can decide whether inference is usable without parsing HTTP
-        errors. ``max_tokens`` is kept at 1 (not forced up) so this stays cheap.
+        errors. The request stays small so this remains a cheap operator check.
         """
         self._read_body()  # drain any body the caller sent
-        # The pinned model reasons before answering, so a 1-token probe truncates and
-        # the proxy rejects it as unusable (a false failure). Give it enough room to
-        # finish a trivial reply; a healthy provider returns 200 in ~2s, an exhausted
-        # key still fails fast with 403.
+        # This diagnostic uses the configured legacy model when one exists; it does
+        # not alter ordinary miner requests.
         api_key = self._inference_api_key()
         pinned_model = resolve_pinned_model(api_key)
         probe_body = json.dumps(
@@ -610,7 +593,7 @@ class ModelPinningRelayHandler(BaseHTTPRequestHandler):
     def _forward(self, method: str) -> None:
         body = self._read_body()
         path = self._path_without_query()
-        query = self.path[len(path):]
+        query = self.path[len(path) :]
         # Agents call `<INFERENCE_API>/inference`, and Kata sets INFERENCE_API to
         # `.../j/<token>` so each problem carries its own budget key. Accept both
         # the tokenized path and a bare /inference (which shares a "default" key).
@@ -632,16 +615,19 @@ class ModelPinningRelayHandler(BaseHTTPRequestHandler):
             )
             return
 
-        # Enforce the per-agent (per-problem) inference budget before spending
-        # upstream tokens.
-        allowed, reason = AGENT_BUDGET.allow(budget_key)
-        if not allowed:
-            self._send_json(429, {"status": "error", "detail": f"inference budget: {reason}"})
-            return
-
         api_key = self._inference_api_key()
-        pinned_model = resolve_pinned_model(api_key)
-        body = pin_model_in_body(body, pinned_model, resolve_max_output_tokens())
+        if platform_policy_enforced():
+            # Legacy validator-funded mode only: prevent an untrusted agent from
+            # spending the operator's budget on a different provider/model.
+            allowed, reason = AGENT_BUDGET.allow(budget_key)
+            if not allowed:
+                self._send_json(429, {"status": "error", "detail": f"inference budget: {reason}"})
+                return
+            body = pin_model_in_body(
+                body,
+                resolve_pinned_model(api_key),
+                resolve_max_output_tokens(),
+            )
 
         headers = {
             key: value
@@ -665,7 +651,8 @@ class ModelPinningRelayHandler(BaseHTTPRequestHandler):
                 if is_inference and 200 <= response.status < 300:
                     input_tokens, output_tokens, _ = extract_usage(response_body)
                     self._meter(response_body)
-                    AGENT_BUDGET.record(budget_key, input_tokens, output_tokens)
+                    if platform_policy_enforced():
+                        AGENT_BUDGET.record(budget_key, input_tokens, output_tokens)
                 self._relay_response(response.status, response.headers.items(), response_body)
         except HTTPError as error:
             # Upstream returned a real HTTP error (4xx/5xx); pass it through verbatim.
@@ -767,7 +754,7 @@ class ModelPinningRelayHandler(BaseHTTPRequestHandler):
 
 
 def build_server(host: str, port: int) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((host, port), ModelPinningRelayHandler)
+    server = ThreadingHTTPServer((host, port), MinerInferenceRelayHandler)
     server.daemon_threads = True
     return server
 
@@ -777,8 +764,9 @@ def main() -> int:
     port = int(os.environ.get("KATA_RELAY_PORT", "8000"))
     server = build_server(host, port)
     print(
-        f"SN60 model-pinning relay listening on {host}:{port} -> {resolve_upstream()} "
-        f"(model pinned to {resolve_pinned_model()}; cost at GET {COST_PATH}, "
+        f"SN60 miner-funded inference relay listening on {host}:{port} -> {resolve_upstream()} "
+        f"(policy={'operator-pinned' if platform_policy_enforced() else 'miner-controlled'}; "
+        f"cost at GET {COST_PATH}, "
         f"zero it with POST {COST_RESET_PATH})",
         file=sys.stderr,
         flush=True,

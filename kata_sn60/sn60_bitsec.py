@@ -24,6 +24,7 @@ from kata.submissions.bundle import (
 )
 from kata.util import write_json
 
+from kata_sn60.execution.policy import tee_execution_enabled
 from kata_sn60.king_cache import (
     KingScoreboard,
     benchmark_version_key,
@@ -39,6 +40,10 @@ DEFAULT_SANDBOX_INFERENCE_API = "http://bitsec_proxy:8000"
 DEFAULT_EVAL_MAX_VULNS = 100
 DEFAULT_REPLICAS_PER_PROJECT = 1
 DEFAULT_BENCHMARK_FILENAME = "curated-highs-only-2025-08-08.json"
+# The upstream sandbox version documented for the live SN60 lane.  Operators
+# must deliberately pass a new commit after reviewing scorer/benchmark changes.
+DEFAULT_SANDBOX_COMMIT = "069ae1e2f152370fa97f3397d8a8f8aed5a78539"
+SANDBOX_COMMIT_ENV = "KATA_SN60_SANDBOX_COMMIT"
 DEFAULT_EXECUTION_SUBPROCESS_TIMEOUT_SECONDS = 35 * 60
 DEFAULT_EVALUATION_SUBPROCESS_TIMEOUT_SECONDS = 60 * 60
 # The problems in one variant are independent codebases and each replica spends
@@ -270,15 +275,16 @@ def run_sn60_bitsec_duel(
     king_root = Path(king_artifact_path).expanduser().resolve()
     candidate_root = Path(candidate_artifact_path).expanduser().resolve()
     output_base = (
-        Path(output_root).expanduser().resolve()
-        if output_root
-        else Path("runs").resolve()
+        Path(output_root).expanduser().resolve() if output_root else Path("runs").resolve()
     )
     run_id = build_sn60_duel_id()
     run_root = output_base / run_id
     run_root.mkdir(parents=True, exist_ok=False)
 
-    resolved_execution_hook = execution_hook or build_default_execution_hook(source)
+    resolved_execution_hook = execution_hook or build_default_execution_hook(
+        source,
+        use_tee=tee_execution_enabled(),
+    )
     resolved_evaluation_hook = evaluation_hook or build_default_evaluation_hook(source)
     king_hash = hash_bundle_root(king_root)
     candidate_hash = hash_bundle_root(candidate_root)
@@ -491,9 +497,7 @@ def resolve_sn60_sandbox_source(
     scorer_version: str,
 ) -> Sn60SandboxSource:
     resolved_sandbox_root = (
-        Path(sandbox_root).expanduser().resolve()
-        if sandbox_root
-        else default_sandbox_root()
+        Path(sandbox_root).expanduser().resolve() if sandbox_root else default_sandbox_root()
     )
     resolved_benchmark_file = (
         Path(benchmark_file).expanduser().resolve()
@@ -516,14 +520,21 @@ def resolve_sn60_sandbox_source(
             f"reads that hardcoded filename; got '{resolved_benchmark_file.name}'. "
             "Rename the snapshot or update the sandbox mirror to match."
         )
-    if sandbox_commit and (resolved_sandbox_root / ".git").exists():
+    expected_commit = (
+        sandbox_commit or os.environ.get(SANDBOX_COMMIT_ENV, "").strip() or DEFAULT_SANDBOX_COMMIT
+    )
+    if (resolved_sandbox_root / ".git").exists():
         actual_commit = resolve_git_commit(resolved_sandbox_root)
-        if actual_commit != sandbox_commit:
+        if actual_commit != expected_commit:
             raise ValueError(
                 "Pinned SN60 sandbox commit does not match the checked-out sandbox: "
-                f"pinned {sandbox_commit}, actual {actual_commit}."
+                f"pinned {expected_commit}, actual {actual_commit}."
             )
-    resolved_commit = sandbox_commit or resolve_git_commit(resolved_sandbox_root)
+        resolved_commit = actual_commit
+    else:
+        # Unit tests and hermetic scorer mirrors may not retain `.git`; their
+        # caller still supplies the exact commit recorded in provenance.
+        resolved_commit = expected_commit
     return Sn60SandboxSource(
         sandbox_root=str(resolved_sandbox_root),
         benchmark_file=str(resolved_benchmark_file),
@@ -628,8 +639,6 @@ def hash_bundle_root(bundle_root: Path) -> str:
 
 def write_sn60_duel_summary(path: Path, summary: Sn60DuelSummary) -> None:
     write_json(path, asdict(summary))
-
-
 
 
 def summarize_variant(
@@ -786,15 +795,9 @@ def extract_evaluation_metrics(evaluation_payload: dict[str, object]) -> Sn60Eva
             if is_success and result_payload.get("result") is not None
             else None
         ),
-        "true_positives": (
-            safe_int(result_payload.get("true_positives"), 0) if is_success else 0
-        ),
-        "total_expected": (
-            safe_int(result_payload.get("total_expected"), 0) if is_success else 0
-        ),
-        "total_found": (
-            safe_int(result_payload.get("total_found"), 0) if is_success else 0
-        ),
+        "true_positives": (safe_int(result_payload.get("true_positives"), 0) if is_success else 0),
+        "total_expected": (safe_int(result_payload.get("total_expected"), 0) if is_success else 0),
+        "total_found": (safe_int(result_payload.get("total_found"), 0) if is_success else 0),
         "precision": safe_float(result_payload.get("precision"), 0.0) if is_success else 0.0,
         "f1_score": safe_float(result_payload.get("f1_score"), 0.0) if is_success else 0.0,
     }
@@ -900,13 +903,13 @@ def build_default_execution_hook(
     timeout_env_name: str = "KATA_SN60_EXECUTION_TIMEOUT_SECONDS",
     timeout_default: float = DEFAULT_EXECUTION_SUBPROCESS_TIMEOUT_SECONDS,
 ) -> Sn60ExecutionHook:
-    # The backend is normally chosen by the lane's EnvSpec.execution (passed as ``use_tee`` by
-    # resolve_execution_hook); when unset, fall back to the KATA_SN60_USE_TEE_ROOM env directly.
+    # The backend is normally chosen by the lane's EnvSpec.execution (passed as
+    # ``use_tee`` by resolve_execution_hook). A direct low-level caller follows
+    # the same TEE-first policy.
     if use_tee is None:
-        use_tee = _sn60_use_tee_room()
+        use_tee = tee_execution_enabled()
     if use_tee:
-        # Run candidates in a sealed room (miner pays, owner never sees the key) instead of
-        # the local sandbox. Opt-in via KATA_SN60_USE_TEE_ROOM; default stays the sandbox.
+        # Run candidates in a sealed room: miner pays and the owner never sees the key.
         return build_tee_room_execution_hook(source)
 
     def _execute(context: Sn60ReplicaContext) -> dict[str, object]:
@@ -992,14 +995,14 @@ def build_default_execution_hook(
 
 
 def _sn60_use_tee_room() -> bool:
-    value = os.environ.get("KATA_SN60_USE_TEE_ROOM", "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    """Compatibility shim for callers that still import the old helper."""
+    return tee_execution_enabled()
 
 
 def resolve_sn60_room_url() -> str:
     url = os.environ.get("KATA_SN60_ROOM_URL", "").strip()
     if not url:
-        raise RuntimeError("KATA_SN60_USE_TEE_ROOM is set but KATA_SN60_ROOM_URL is empty")
+        raise RuntimeError("TEE execution requires KATA_SN60_ROOM_URL")
     parsed = urlparse(url)
     allow_insecure = os.environ.get("KATA_SN60_ALLOW_INSECURE_ROOM_URL", "").strip().lower()
     if parsed.scheme not in {"https", "http"} or not parsed.netloc:
@@ -1072,9 +1075,7 @@ def build_tee_room_execution_hook(source: Sn60SandboxSource) -> Sn60ExecutionHoo
     return _execute
 
 
-def _read_untrusted_report_json(
-    path: Path, *, failure: dict[str, object]
-) -> dict[str, object]:
+def _read_untrusted_report_json(path: Path, *, failure: dict[str, object]) -> dict[str, object]:
     """Read an agent-writable JSON report, returning `failure` (with the parse
     error appended) instead of raising on malformed or non-object content."""
     try:
@@ -1192,9 +1193,7 @@ def build_default_evaluation_hook(source: Sn60SandboxSource) -> Sn60EvaluationHo
                     # filename and reads settings.validator_dir, so without this the
                     # recorded benchmark_sha256 could describe a different file than
                     # the one actually scored.
-                    "VALIDATOR_DIR": str(
-                        Path(source.benchmark_file).expanduser().resolve().parent
-                    ),
+                    "VALIDATOR_DIR": str(Path(source.benchmark_file).expanduser().resolve().parent),
                     "CHUTES_API_KEY": required_env("CHUTES_API_KEY"),
                     "PROXY_URL": DEFAULT_SANDBOX_PROXY_URL,
                 },
@@ -1325,16 +1324,10 @@ def build_bitsec_evaluation_command(context: Sn60ReplicaContext) -> list[str]:
         f"id={ids.job_run_id}, job_id={ids.job_id}, "
         f"validator_id={ids.validator_id}, agent_id={ids.agent_id}), "
         "agent_filepath='', "
-        "project_key="
-        + repr(str(context.project_key))
-        + ", "
-        "job_run_reports_dir="
-        + repr(str(Path(context.reports_root).parent.resolve()))
-        + ", "
+        "project_key=" + repr(str(context.project_key)) + ", "
+        "job_run_reports_dir=" + repr(str(Path(context.reports_root).parent.resolve())) + ", "
         "platform_client=MockPlatformClient(), "
-        "eval_max_vulns="
-        + str(int(context.eval_max_vulns))
-        + "); "
+        "eval_max_vulns=" + str(int(context.eval_max_vulns)) + "); "
         "print(json.dumps(executor.eval_job_run(), default=str))"
     )
     return ["uv", "run", "python", "-c", script]

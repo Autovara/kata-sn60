@@ -8,6 +8,19 @@ It plugs into the platform via the `kata.subnets` entry point (`pyproject.toml`)
 discovers and loads it with no code change. Install it into the engine's environment
 (`uv pip install -e .` / `pip install kata-sn60`) and the `sn60_bitsec` lane becomes available.
 
+## Execution policy
+
+Production is TEE-first: without configuration, SN60 selects the Phala sealed-room backend and
+requires `KATA_SN60_ROOM_URL`, room authentication, and approved TEE measurements. The miner's
+sealed credential is the only credential an agent receives. Local Docker execution is only for
+development and must be selected explicitly with `KATA_SN60_EXECUTION_BACKEND=sandbox`.
+
+The upstream sandbox is pinned to commit
+`069ae1e2f152370fa97f3397d8a8f8aed5a78539`. A production operator must deliberately provide a
+different `--sn60-sandbox-commit` or `KATA_SN60_SANDBOX_COMMIT` after reviewing the new scorer and
+benchmark. The TEE runner already requires immutable problem-image digests; do not use the local
+development sandbox as a production fallback.
+
 ```
 kata_sn60/
   plugin.py            implements SubnetPlugin (the plug)
@@ -15,7 +28,8 @@ kata_sn60/
   promotion.py verify.py screening.py static_screening.py
   benchmark_replay.py llm_review.py sandbox_canary.py   anti-cheat
   evaluate.py cli.py round.py progress.py               duel + CLI + round wiring
-  validator_system/    challenge · project_selection · model_relay · tee_room · screening
+  execution/           TEE-room client and execution-backend policy
+  validator_system/    challenge · project_selection · screening · model_relay
 ```
 
 Depends on `kata` for the `SubnetPlugin` contract, the registry, and generic screening/promotion

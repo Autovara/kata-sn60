@@ -1,4 +1,4 @@
-"""Build SN60's round artifacts from a generic RoundOutcome (Phase 3b).
+"""Build SN60 round artifacts from a generic ``RoundOutcome``.
 
 ``run_sn60_plugin_round`` runs a full SN60 round entirely through the subnet-agnostic
 :func:`~kata.core.round.run_plugin_round` orchestrator and reconstructs the exact
@@ -17,6 +17,7 @@ from kata.core.round import RoundOutcome, ScoredVariant, run_plugin_round
 from kata_sn60.sn60_bitsec import (
     Sn60DuelSummary,
     hash_bundle_root,
+    validate_sn60_project_keys,
     write_sn60_duel_summary,
 )
 from kata_sn60.validator_system.challenge import (
@@ -38,6 +39,7 @@ from kata_sn60.validator_system.screening import screening_result_payload
 
 from .plugin import Sn60BitsecPlugin, Sn60Problems
 from .progress import Sn60RoundProgress
+from .round_inputs import validate_round_candidates
 
 
 def _winner_duel_summary(
@@ -103,8 +105,7 @@ def build_sn60_round_result(
                 artifact_path=str(Path(variant.agent_path).expanduser().resolve()),
                 artifact_hash=variant.card.payload.artifact_hash,
                 beats_king=beats_king,
-                duel_run_id=screener_run_ids.get(variant.label)
-                or f"{run_id}-{variant.label}",
+                duel_run_id=screener_run_ids.get(variant.label) or f"{run_id}-{variant.label}",
                 candidate=variant.card.payload,
                 selected_winner=(
                     outcome.winner is not None and variant.label == outcome.winner.label
@@ -250,12 +251,17 @@ def run_sn60_plugin_round(
     when a candidate qualifies), and writes board-format live progress when
     ``progress_path`` is set.
     """
+    candidates = validate_round_candidates(candidates)
     plugin = plugin or Sn60BitsecPlugin()
     run_id = run_id or build_sn60_round_id()
     round_root = Path(output_root).expanduser().resolve() / run_id
     round_root.mkdir(parents=True, exist_ok=False)
 
     problems: Sn60Problems = plugin.sample_problems(seed=run_id, config=config)
+    validate_sn60_project_keys(
+        problems.project_keys,
+        sandbox_source=problems.sandbox_source,
+    )
     writer = (
         Sn60RoundProgress(
             run_id=run_id,

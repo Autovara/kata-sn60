@@ -2,6 +2,7 @@
 
 Uses fake launcher/verifier so the whole flow is testable without a real TEE.
 """
+
 import hashlib
 import hmac
 
@@ -30,6 +31,7 @@ def test_room_signature_requires_the_shared_secret(monkeypatch):
     monkeypatch.delenv(ROOM_AUTH_SECRET_ENV, raising=False)
     with pytest.raises(RuntimeError, match=ROOM_AUTH_SECRET_ENV):
         room_signature(b"x")
+
 
 APPROVED = "approved-runner-image"
 POLICY = RoomPolicy(approved_measurements=frozenset({APPROVED}))
@@ -81,7 +83,10 @@ class _Launcher:
 
 def _eval(**over):
     kw = dict(
-        candidate_id="pr-1", agent_ref="b", project_key=PROJECT, sealed_key_ref="blob",
+        candidate_id="pr-1",
+        agent_ref="b",
+        project_key=PROJECT,
+        sealed_key_ref="blob",
         nonce=NONCE,
         bundle_sha256=BUNDLE_SHA256,
         policy=POLICY,
@@ -128,8 +133,14 @@ def test_verify_binds_answer():
             return good
 
     r = verify_room_run(
-        quote_hex="q", report=REPORT, nonce=NONCE, project_key=PROJECT,
-        bundle_sha256=BUNDLE_SHA256, provenance=PROVENANCE, policy=POLICY, verifier=V(),
+        quote_hex="q",
+        report=REPORT,
+        nonce=NONCE,
+        project_key=PROJECT,
+        bundle_sha256=BUNDLE_SHA256,
+        provenance=PROVENANCE,
+        policy=POLICY,
+        verifier=V(),
     )
     assert r.accepted
 

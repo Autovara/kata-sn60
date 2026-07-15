@@ -24,9 +24,7 @@ def test_sn60_baseline_cli_is_separate_from_round_mode() -> None:
         action for action in parser._actions if getattr(action, "choices", None)
     )
     baseline_parser = subparser_action.choices["sn60-baseline"]
-    option_dests = {
-        action.dest for action in baseline_parser._actions if action.option_strings
-    }
+    option_dests = {action.dest for action in baseline_parser._actions if action.option_strings}
 
     assert "candidate" in option_dests
     assert "king_path" not in option_dests
@@ -235,9 +233,7 @@ def test_round_cli_parses_candidates_and_emits_json(monkeypatch, capsys) -> None
         captured.update(kwargs)
         return fake_result
 
-    monkeypatch.setattr(
-        "kata_sn60.plugin.Sn60BitsecPlugin.run_round", fake_run_round
-    )
+    monkeypatch.setattr("kata_sn60.plugin.Sn60BitsecPlugin.run_round", fake_run_round)
 
     exit_code = main(
         [
@@ -309,9 +305,7 @@ def test_round_cli_supports_candidate_only_mode(monkeypatch, capsys) -> None:
         captured.update(kwargs)
         return fake_result
 
-    monkeypatch.setattr(
-        "kata_sn60.plugin.Sn60BitsecPlugin.run_round", fake_run_round
-    )
+    monkeypatch.setattr("kata_sn60.plugin.Sn60BitsecPlugin.run_round", fake_run_round)
 
     exit_code = main(
         [
@@ -386,9 +380,7 @@ def test_round_cli_samples_problems_when_keys_omitted(tmp_path, monkeypatch, cap
             entries=[],
         )
 
-    monkeypatch.setattr(
-        "kata_sn60.plugin.Sn60BitsecPlugin.run_round", fake_run_round
-    )
+    monkeypatch.setattr("kata_sn60.plugin.Sn60BitsecPlugin.run_round", fake_run_round)
 
     exit_code = main(
         [

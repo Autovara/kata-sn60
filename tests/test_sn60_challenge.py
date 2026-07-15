@@ -398,9 +398,7 @@ def test_run_sn60_challenge_optional_screener_project_runs_before_duel(
     assert execution_order[0] == "screening"
     assert execution_order.count("screening") == 1
     screening = json.loads(
-        Path(summary.manifest_path).with_name("screening_result.json").read_text(
-            encoding="utf-8"
-        )
+        Path(summary.manifest_path).with_name("screening_result.json").read_text(encoding="utf-8")
     )
     screener = screening["details"]["screener_project"]
     assert screener["status"] == "passed"
@@ -1022,16 +1020,12 @@ def test_run_sn60_round_completes_when_every_candidate_fails_screener(
     assert result.winner_submission_id is None
     assert result.promotion_ready is False
     assert {entry.submission_id for entry in result.entries} == {"cand-a", "cand-b"}
-    assert all(
-        entry.screening_result["status"] == "failed" for entry in result.entries
-    )
+    assert all(entry.screening_result["status"] == "failed" for entry in result.entries)
     assert ran.get("candidate", 0) == 0  # no duel ran
     assert ran.get("king", 0) == 0  # king never scored
     # The round summary is written and re-readable with a null king.
     summary = json.loads(
-        (tmp_path / "runs" / result.run_id / "round_summary.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "runs" / result.run_id / "round_summary.json").read_text(encoding="utf-8")
     )
     assert summary["king"] is None
 

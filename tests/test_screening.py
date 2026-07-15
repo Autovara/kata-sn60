@@ -133,9 +133,7 @@ def test_screening_enforces_sn60_total_bundle_size_limit(tmp_path: Path) -> None
     assert str(MAX_SUBMISSION_BUNDLE_BYTES) in findings[0].reason
 
 
-def test_resolve_llm_benchmark_file_uses_sandbox_root(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_resolve_llm_benchmark_file_uses_sandbox_root(tmp_path: Path, monkeypatch) -> None:
     benchmark_path = write_sandbox_source(tmp_path / "sandbox")
     monkeypatch.delenv("KATA_SCREENING_LLM_BENCHMARK_FILE", raising=False)
     monkeypatch.delenv("KATA_SN60_BENCHMARK_FILE", raising=False)
@@ -150,8 +148,7 @@ def test_validate_sn60_static_screening_allows_helper_files_but_rejects_leak_tok
     bundle_root = tmp_path / "candidate"
     write_bundle(
         bundle_root,
-        "KNOWN = 'curated-highs-only'\n"
-        + VALID_AGENT_SOURCE,
+        "KNOWN = 'curated-highs-only'\n" + VALID_AGENT_SOURCE,
         helper_source="VALUE = 1\n",
     )
 
@@ -180,8 +177,7 @@ def test_screen_submission_wraps_current_static_screening(tmp_path: Path) -> Non
     bundle_root = tmp_path / "candidate"
     write_bundle(
         bundle_root,
-        "KNOWN = 'curated-highs-only'\n"
-        + VALID_AGENT_SOURCE,
+        "KNOWN = 'curated-highs-only'\n" + VALID_AGENT_SOURCE,
         helper_source="VALUE = 1\n",
     )
 
@@ -206,8 +202,7 @@ def test_screen_submission_skips_sn60_static_for_non_sn60_lane(tmp_path: Path) -
     bundle_root = tmp_path / "candidate"
     write_bundle(
         bundle_root,
-        "KNOWN = 'curated-highs-only'\n"
-        + VALID_AGENT_SOURCE,
+        "KNOWN = 'curated-highs-only'\n" + VALID_AGENT_SOURCE,
         helper_source="VALUE = 1\n",
     )
 
@@ -218,9 +213,7 @@ def test_screen_submission_skips_sn60_static_for_non_sn60_lane(tmp_path: Path) -
         repo_pack="other__subnet",
     )
 
-    assert "sn60.answer_key_token" not in {
-        finding.rule_id for finding in decision.reject_reasons
-    }
+    assert "sn60.answer_key_token" not in {finding.rule_id for finding in decision.reject_reasons}
 
 
 def test_screen_submission_reports_exact_benchmark_replay_signals(tmp_path: Path) -> None:
@@ -228,8 +221,7 @@ def test_screen_submission_reports_exact_benchmark_replay_signals(tmp_path: Path
     write_bundle(
         bundle_root,
         "PROJECT = 'code4rena_secondswap_2025_02'\n"
-        "FINDING = '2024-12-secondswap_H-01'\n"
-        + VALID_AGENT_SOURCE,
+        "FINDING = '2024-12-secondswap_H-01'\n" + VALID_AGENT_SOURCE,
     )
 
     decision = screen_submission(
@@ -255,8 +247,7 @@ def test_screen_submission_can_promote_replay_signals_to_review_status(
     bundle_root = tmp_path / "candidate"
     write_bundle(
         bundle_root,
-        "PROJECT = 'code4rena_mantra-dex_2025_03'\n"
-        + VALID_AGENT_SOURCE,
+        "PROJECT = 'code4rena_mantra-dex_2025_03'\n" + VALID_AGENT_SOURCE,
     )
 
     decision = screen_submission(
@@ -279,8 +270,7 @@ def test_screen_submission_rejects_replay_signals_in_strict_mode(
     bundle_root = tmp_path / "candidate"
     write_bundle(
         bundle_root,
-        "PROJECT = 'code4rena_mantra-dex_2025_03'\n"
-        + VALID_AGENT_SOURCE,
+        "PROJECT = 'code4rena_mantra-dex_2025_03'\n" + VALID_AGENT_SOURCE,
     )
 
     decision = screen_submission(
@@ -317,8 +307,7 @@ def test_screen_submission_rejects_known_title_and_answer_text_in_strict_mode(
         "    'MarketplaceToken allows replayed answer text to be detected when a '\n"
         "    'candidate copies a long known benchmark explanation into its static '\n"
         "    'report bank.'\n"
-        ")\n"
-        + VALID_AGENT_SOURCE,
+        ")\n" + VALID_AGENT_SOURCE,
     )
 
     decision = screen_submission(
@@ -346,8 +335,7 @@ def test_screen_submission_rejects_known_title_and_answer_text_in_strict_mode(
         for reason in decision.rejection_messages()
     )
     assert any(
-        "exact known benchmark answer text" in reason
-        for reason in decision.rejection_messages()
+        "exact known benchmark answer text" in reason for reason in decision.rejection_messages()
     )
 
 
@@ -461,10 +449,7 @@ def test_screen_submission_catches_case_folded_project_fingerprint(
         strict_replay=True,
     )
 
-    rule_ids = {
-        finding.rule_id
-        for finding in decision.review_reasons + decision.reject_reasons
-    }
+    rule_ids = {finding.rule_id for finding in decision.review_reasons + decision.reject_reasons}
     assert "benchmark_replay.project_fingerprint_branch" in rule_ids
     assert "benchmark_replay.early_return_fingerprint" in rule_ids
 
@@ -526,10 +511,7 @@ def test_screen_submission_does_not_flag_common_identifiers_as_fingerprints(
         enable_review=True,
         strict_replay=True,
     )
-    rule_ids = {
-        finding.rule_id
-        for finding in decision.review_reasons + decision.reject_reasons
-    }
+    rule_ids = {finding.rule_id for finding in decision.review_reasons + decision.reject_reasons}
     assert "benchmark_replay.project_fingerprint_branch" not in rule_ids
     assert "benchmark_replay.early_return_fingerprint" not in rule_ids
 
@@ -636,8 +618,7 @@ def test_screen_submission_allows_generic_reusable_detector(tmp_path: Path) -> N
     write_bundle(
         bundle_root,
         "def transfers_tokens_before_state_update(source):\n"
-        "    return '.call(' in source and 'balances[' in source\n"
-        + VALID_AGENT_SOURCE,
+        "    return '.call(' in source and 'balances[' in source\n" + VALID_AGENT_SOURCE,
     )
 
     decision = screen_submission(
@@ -733,10 +714,7 @@ def test_screen_submission_rejects_source_line_probe_bank_in_strict_mode(
 
     assert decision.status == "reject"
     assert not decision.passed
-    assert any(
-        "hardcoded benchmark replay" in message
-        for message in decision.rejection_messages()
-    )
+    assert any("hardcoded benchmark replay" in message for message in decision.rejection_messages())
 
 
 def test_screen_submission_allows_short_keyword_substring_probes(
@@ -753,8 +731,7 @@ def test_screen_submission_allows_short_keyword_substring_probes(
         "        'delegatecall' in source,\n"
         "        'tx.origin' in source,\n"
         "        'selfdestruct' in source,\n"
-        "    )\n"
-        + VALID_AGENT_SOURCE,
+        "    )\n" + VALID_AGENT_SOURCE,
     )
 
     decision = screen_submission(
@@ -818,8 +795,7 @@ def test_run_sn60_screening_persists_static_failure_without_execution(
     bundle_root = tmp_path / "candidate"
     write_bundle(
         bundle_root,
-        "def agent_main(project_dir):\n"
-        "    return {'vulnerabilities': []}\n",
+        "def agent_main(project_dir):\n    return {'vulnerabilities': []}\n",
     )
     execution_called = False
 
@@ -881,8 +857,7 @@ def test_validate_sn60_static_screening_rejects_expanded_leak_tokens(
     bundle_root = tmp_path / "candidate"
     write_bundle(
         bundle_root,
-        "GROUND = 'ground_truth'\n"
-        + VALID_AGENT_SOURCE,
+        "GROUND = 'ground_truth'\n" + VALID_AGENT_SOURCE,
     )
 
     reasons = validate_sn60_static_screening(bundle_root)
@@ -919,8 +894,7 @@ def test_validate_sn60_static_screening_rejects_hardcoded_chutes_key(
     bundle_root = tmp_path / "candidate"
     write_bundle(
         bundle_root,
-        "KEY = 'cpk_abcdefghij1234567890'\n"
-        + VALID_AGENT_SOURCE,
+        "KEY = 'cpk_abcdefghij1234567890'\n" + VALID_AGENT_SOURCE,
     )
 
     reasons = validate_sn60_static_screening(bundle_root)

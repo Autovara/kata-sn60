@@ -1,8 +1,7 @@
-"""SN60 promotion provenance: parse the duel summary and record lane provenance.
+"""Persist SN60-specific challenge and promotion provenance.
 
-Moved out of the generic promotion module (``kata/promotion_system/king.py``) so the platform
-promotion path stays subnet-blind; the SN60 plugin calls these via
-``record_promotion_provenance``. Relocates to ``kata-sn60`` in Phase 3.
+The SN60 plugin calls this after Kata has verified a winning submission; the
+generic promotion path remains subnet-neutral.
 """
 
 from __future__ import annotations
