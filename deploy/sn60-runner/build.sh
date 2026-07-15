@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build (and optionally push) the SN60 sealed-room runner image = kata-tee-runner base + the SN60
-# profile. Vendors relay.py from the SN60 relay source of truth so it never goes stale.
+# profile. Vendors the inference gateway from the SN60 source of truth so it never goes stale.
 #
 # Usage:
 #   BASE=registry/kata-tee-runner@sha256:<digest> ./build.sh v9
@@ -15,11 +15,11 @@ case "$BASE" in
   *) echo "ERROR: BASE must be an immutable image digest (...@sha256:...)" >&2; exit 1 ;;
 esac
 
-# The relay's source of truth (see ../../KATA-TEE-RUNNER-PLAN.md §6). Vendored, never edited here.
-RELAY_SRC="../../kata_sn60/validator_system/model_relay.py"
-[ -f "$RELAY_SRC" ] || { echo "ERROR: relay source not found at $RELAY_SRC" >&2; exit 1; }
-cp "$RELAY_SRC" relay.py
-echo "vendored relay.py <- $RELAY_SRC"
+# The gateway source of truth. Vendored, never edited here.
+GATEWAY_SRC="../../kata_sn60/validator_system/inference_gateway.py"
+[ -f "$GATEWAY_SRC" ] || { echo "ERROR: gateway source not found at $GATEWAY_SRC" >&2; exit 1; }
+cp "$GATEWAY_SRC" inference_gateway.py
+echo "vendored inference_gateway.py <- $GATEWAY_SRC"
 
 docker build --build-arg BASE="$BASE" -t "$IMAGE" .
 echo "built $IMAGE (FROM $BASE)"

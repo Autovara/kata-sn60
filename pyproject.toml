@@ -13,7 +13,7 @@ dependencies = [
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
-kata-sn60-model-relay = "kata_sn60.validator_system.model_relay:main"
+kata-sn60-inference-gateway = "kata_sn60.validator_system.inference_gateway:main"
 
 # Discovered by the Kata platform via the kata.subnets entry-point group.
 [project.entry-points."kata.subnets"]

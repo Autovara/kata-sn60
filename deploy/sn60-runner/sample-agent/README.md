@@ -19,7 +19,7 @@ def agent_main(project_dir=None, inference_api=None) -> dict:
   scores your findings vs hidden ground truth.
 - Call the AI via `POST {inference_api}/inference` with header `x-inference-api-key` and
   an OpenAI-compatible request body. Choose the `model`, sampling, token settings, and retry
-  behavior that your own key/provider supports; the relay forwards them unchanged.
+  behavior that your own key/provider supports; the gateway forwards them unchanged.
 
 ## How to submit (two files in your PR)
 1. `agent.py` — this file (or your improved version).

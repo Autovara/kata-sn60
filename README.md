@@ -29,7 +29,7 @@ kata_sn60/
   benchmark_replay.py llm_review.py sandbox_canary.py   anti-cheat
   evaluate.py cli.py round.py progress.py               duel + CLI + round wiring
   execution/           TEE-room client and execution-backend policy
-  validator_system/    challenge · project_selection · screening · model_relay
+  validator_system/    challenge · project_selection · screening · inference_gateway
 ```
 
 Depends on `kata` for the `SubnetPlugin` contract, the registry, and generic screening/promotion

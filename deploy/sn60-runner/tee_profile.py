@@ -2,8 +2,8 @@
 
 Implements the generic ``room.profile.TeeJobProfile`` seam. The bitsec problem is a private GHCR
 image; the miner's agent runs against it in a resource-capped container, talking only to the in-room
-relay for inference, and writes ``report.json`` (its findings). Everything generic -- sealing, the
-relay/sealed net, attestation, HTTP -- is the room's; only this SN60-specific execution lives here.
+inference gateway, and writes ``report.json`` (its findings). Sealing, the gateway/sealed network,
+attestation, and HTTP are generic-room responsibilities; this file is SN60-specific.
 
 This file is SN60-specific and moves to ``kata-sn60`` in T2; for now it rides in the runner repo."""
 
@@ -17,17 +17,17 @@ import tempfile
 from pathlib import Path
 
 from room.bundle import extract_submission_bundle
-from room.profile import TeeJobResult
-from room.relay_net import (
+from room.inference_network import (
     GHCR,
     INF_NET,
-    RELAY_ALIAS,
-    RELAY_PORT,
+    INFERENCE_GATEWAY_ALIAS,
+    INFERENCE_GATEWAY_PORT,
     docker,
-    ensure_relay_net_once,
+    ensure_inference_network_once,
     ghcr_login,
-    start_relay_once,
+    start_inference_gateway_once,
 )
+from room.profile import TeeJobResult
 from room.sealing import resolve_inference_key
 
 FIXTURE_AGENT = "/app/fixture_agent.py"
@@ -123,11 +123,11 @@ class Sn60TeeProfile:
         if pull.returncode != 0:
             raise RuntimeError(f"pull {image} failed: {pull.stderr[:400]}")
 
-        # Bring up the in-room relay + sealed network. The relay forwards the
+        # Bring up the in-room gateway + sealed network. The gateway forwards the
         # miner's request and decrypted key without imposing a platform model or
         # token/call policy.
-        start_relay_once()
-        ensure_relay_net_once()
+        start_inference_gateway_once()
+        ensure_inference_network_once()
 
         container_suffix = hashlib.sha256(f"{project_key}:{job_id}".encode()).hexdigest()[:20]
         container = f"kata-sn60-{container_suffix}"
@@ -135,14 +135,14 @@ class Sn60TeeProfile:
         # No deploy-time key exists. An inference-free agent may intentionally omit its ciphertext;
         # it receives an empty credential, never an operator-funded fallback.
         inference_key = resolve_inference_key(sealed_key, required=False)
-        # The agent talks ONLY to the relay (sealed net); the relay carries the miner's key.
+        # The agent talks ONLY to the gateway (sealed net); it carries the miner's key.
         env_args = [
             "-e",
             f"PROJECT_KEY={project_key}",
             "-e",
             f"INFERENCE_API_KEY={inference_key}",
             "-e",
-            f"INFERENCE_API=http://{RELAY_ALIAS}:{RELAY_PORT}/j/{job_id}",
+            f"INFERENCE_API=http://{INFERENCE_GATEWAY_ALIAS}:{INFERENCE_GATEWAY_PORT}/j/{job_id}",
         ]
         try:
             with tempfile.TemporaryDirectory() as directory:

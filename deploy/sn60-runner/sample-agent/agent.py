@@ -10,7 +10,7 @@ INFERENCE (how you call the AI inside the room):
     headers: {"x-inference-api-key": os.environ["INFERENCE_API_KEY"]}
     body:    {"model": "your/provider-model", "messages": [...]}
     resp:    OpenAI-style {"choices": [{"message": {"content": "..."}}]}
-  You choose the provider/model and pay with YOUR sealed key. The relay forwards
+  You choose the provider/model and pay with YOUR sealed key. The gateway forwards
   request controls unchanged.
 
 This is a STARTING POINT. It discovers source files, asks the model to find bugs, and

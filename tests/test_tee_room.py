@@ -42,7 +42,7 @@ BUNDLE_SHA256 = "ab" * 32
 PROVENANCE = {
     "profile": "sn60-bitsec-v1",
     "project_image": "ghcr.io/bitsec-ai/demo@sha256:" + "cd" * 32,
-    "pinned_model": "qwen-test",
+    "inference_policy": "miner-controlled",
     "job_id": NONCE.hex(),
 }
 

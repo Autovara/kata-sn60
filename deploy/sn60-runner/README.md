@@ -1,7 +1,7 @@
 # SN60 sealed runner deployment
 
 This image is the SN60 profile on top of the generic `kata-tee-runner` room. It executes an
-untrusted candidate only on the room's internal Docker network, and its model relay receives a
+untrusted candidate only on the room's internal Docker network, and its inference gateway receives a
 candidate-provided key for each job. There is no validator or deploy-time inference-key fallback.
 
 1. Build the generic room with an immutable Python base:
@@ -21,7 +21,10 @@ candidate-provided key for each job. There is no validator or deploy-time infere
 
 3. In Phala, deliver `KATA_ROOM_AUTH_SECRET`, `GHCR_USER`, and `GHCR_TOKEN` as sealed secrets.
    Set `KATA_SN60_TEE_IMAGE_DIGESTS_JSON` to a JSON object mapping every permitted Bitsec project
-   key to its GHCR `sha256:<digest>`. Configure the relay upstream/provider routes. The relay
+   key to its GHCR `sha256:<digest>`. Configure the gateway upstream/provider routes:
+   `KATA_INFERENCE_GATEWAY_UPSTREAM` for proxy-supported keys, or
+   `KATA_INFERENCE_GATEWAY_DIRECT_KEY_PREFIXES` plus
+   `KATA_INFERENCE_GATEWAY_DIRECT_UPSTREAM` for another OpenAI-compatible provider. The gateway
    forwards the miner's own key and requested model, sampling, token, and call settings unchanged.
 
 4. Set `KATA_ROOM_BIND_ADDRESS` to a private validator-reachable address. Keep the default loopback
@@ -35,8 +38,9 @@ candidate-provided key for each job. There is no validator or deploy-time infere
 For a miner key, the miner verifies `/pubkey`'s room attestation, seals their provider API key to
 that public key, and commits the ciphertext as `sealed_inference_key` with their submission. The
 initial public baseline has no ciphertext because it intentionally makes no funded inference calls;
-an agent without a ciphertext receives an empty credential, never a platform key.
+an agent without a ciphertext receives an empty credential, never a platform key. The gateway rejects
+an inference request without a miner key before it can reach any provider.
 
 `/run` accepts only signed, short-lived, one-time requests. Its quote binds the report, candidate
-bundle hash, profile/image/model provenance, project, and nonce. `POST /pull-test` is disabled by
+bundle hash, profile/image/inference-policy provenance, project, and nonce. `POST /pull-test` is disabled by
 default and can be enabled only as a signed diagnostic.

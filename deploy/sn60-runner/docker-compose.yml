@@ -26,14 +26,17 @@ services:
       - GHCR_TOKEN=${GHCR_TOKEN}
       # JSON map: each allowed project key -> sha256:<64 hex>. There is no :latest fallback.
       - KATA_SN60_TEE_IMAGE_DIGESTS_JSON=${KATA_SN60_TEE_IMAGE_DIGESTS_JSON}
-      # --- in-room miner-funded inference relay ---
-      # The relay forwards the miner's key and request without setting a model,
+      # --- in-room miner-funded inference gateway ---
+      # The gateway forwards the miner's key and request without setting a model,
       # sampling policy, token budget, call budget, or retry budget.
-      - KATA_RELAY_UPSTREAM=${KATA_RELAY_UPSTREAM}
-      - KATA_RELAY_DIRECT_UPSTREAM=${KATA_RELAY_DIRECT_UPSTREAM}
-      - KATA_RELAY_DIRECT_KEY_PREFIXES=${KATA_RELAY_DIRECT_KEY_PREFIXES}
-      - KATA_RELAY_DIRECT_ALLOW_UNKNOWN=${KATA_RELAY_DIRECT_ALLOW_UNKNOWN}
-      - KATA_RELAY_ENFORCE_PLATFORM_POLICY=false
+      - KATA_INFERENCE_GATEWAY_UPSTREAM=${KATA_INFERENCE_GATEWAY_UPSTREAM}
+      - KATA_INFERENCE_GATEWAY_TIMEOUT=${KATA_INFERENCE_GATEWAY_TIMEOUT}
+      - KATA_INFERENCE_GATEWAY_AKASH_UPSTREAM=${KATA_INFERENCE_GATEWAY_AKASH_UPSTREAM}
+      - KATA_INFERENCE_GATEWAY_DIRECT_UPSTREAM=${KATA_INFERENCE_GATEWAY_DIRECT_UPSTREAM}
+      - KATA_INFERENCE_GATEWAY_DIRECT_KEY_PREFIXES=${KATA_INFERENCE_GATEWAY_DIRECT_KEY_PREFIXES}
+      - KATA_INFERENCE_GATEWAY_DIRECT_ALLOW_UNKNOWN=${KATA_INFERENCE_GATEWAY_DIRECT_ALLOW_UNKNOWN}
+      - KATA_INFERENCE_GATEWAY_DIRECT_AUTH_HEADER=${KATA_INFERENCE_GATEWAY_DIRECT_AUTH_HEADER}
+      - KATA_INFERENCE_GATEWAY_DIRECT_AUTH_VALUE_TEMPLATE=${KATA_INFERENCE_GATEWAY_DIRECT_AUTH_VALUE_TEMPLATE}
     volumes:
       # dstack guest-agent socket -- lets the app call get_quote.
       - /var/run/dstack.sock:/var/run/dstack.sock

@@ -914,11 +914,9 @@ def build_default_execution_hook(
 
     def _execute(context: Sn60ReplicaContext) -> dict[str, object]:
         proxy_network = resolve_sn60_proxy_network()
-        # Scope the relay's per-agent inference budget to THIS problem: embed a
-        # unique token (per variant/project/replica) in the URL the agent calls.
-        # Agents append "/inference" to INFERENCE_API, so the relay reads the token
-        # from the path and meters each agent-run independently — regardless of the
-        # shared network source address.
+        # Associate each call with this sealed-room job without exposing the job
+        # path to a provider. Agents append "/inference"; the gateway strips this
+        # local correlation segment before forwarding the unchanged request.
         budget_token = sn60_synthetic_ids(context).job_run_id
         inference_api = f"{resolve_sn60_inference_api().rstrip('/')}/j/{budget_token}"
         # Untrusted miner code runs in this container; guarantee it can only
