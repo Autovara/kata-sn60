@@ -5,7 +5,6 @@ import json
 import os
 import re
 import secrets
-import shutil
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,7 +19,7 @@ from kata.provenance import sha256_directory
 from kata.submissions.bundle import (
     AGENT_ENTRY_FILENAME,
     load_bundle_files,
-    write_bundle_files,
+    stage_submission_bundle,
 )
 from kata.util import write_json
 
@@ -621,13 +620,15 @@ def build_sn60_duel_id() -> str:
 
 
 def stage_bundle(source_root: Path, destination_root: Path) -> None:
-    bundle_files = load_bundle_files(source_root)
-    if not bundle_files:
-        raise ValueError(f"SN60 artifact bundle is empty: {source_root}")
-    if destination_root.exists():
-        shutil.rmtree(destination_root)
-    destination_root.mkdir(parents=True, exist_ok=True)
-    write_bundle_files(destination_root, bundle_files)
+    """Stage the exact submitted files used by sealed-room execution.
+
+    Preserve ``submission.json`` and source bytes. The miner's sealed
+    credential binds the submission before the validator stages it, so removing
+    metadata or normalizing source text would make a valid credential fail in
+    the room.
+    """
+
+    stage_submission_bundle(source_root, destination_root)
 
 
 def hash_bundle_root(bundle_root: Path) -> str:

@@ -23,6 +23,7 @@ from kata_sn60.execution.tee_room import (
     room_signature,
     verify_room_run,
 )
+from kata_sn60.sn60_bitsec import stage_bundle
 
 
 def test_room_signature_matches_the_rooms_hmac(monkeypatch):
@@ -58,6 +59,23 @@ def test_bundle_transfer_excludes_transient_local_files(tmp_path: Path) -> None:
     assert not any("__pycache__" in name for name in names)
     assert not any(name.endswith((".pyc", ".pyo")) for name in names)
     assert not any(name == ".git" or name.startswith(".git/") for name in names)
+
+
+def test_stage_bundle_preserves_submission_metadata_and_source_bytes(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    agent = b"def agent_main(): pass  \n\n"
+    metadata = b'{"submission_id":"alice-20260708-01"}'
+    (source / "agent.py").write_bytes(agent)
+    (source / "agent_manifest.json").write_bytes(b'{"schema_version":1}\n')
+    (source / "submission.json").write_bytes(metadata)
+    (source / "sealed_inference_key").write_bytes(b"ciphertext")
+
+    destination = tmp_path / "staged"
+    stage_bundle(source, destination)
+
+    assert (destination / "agent.py").read_bytes() == agent
+    assert (destination / "submission.json").read_bytes() == metadata
 
 
 APPROVED = "approved-runner-image"
