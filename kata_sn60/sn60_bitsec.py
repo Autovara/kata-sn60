@@ -16,12 +16,6 @@ from statistics import fmean
 from typing import Callable, NamedTuple, TypedDict
 from urllib.parse import urlparse
 
-from kata.evaluators.king_cache import (
-    KingScoreboard,
-    benchmark_version_key,
-    load_king_scoreboard,
-    save_king_scoreboard,
-)
 from kata.provenance import sha256_directory
 from kata.submission_system.bundle import (
     AGENT_ENTRY_FILENAME,
@@ -29,6 +23,13 @@ from kata.submission_system.bundle import (
     write_bundle_files,
 )
 from kata.util import write_json
+
+from kata_sn60.king_cache import (
+    KingScoreboard,
+    benchmark_version_key,
+    load_king_scoreboard,
+    save_king_scoreboard,
+)
 
 SN60_BITSEC_EVALUATOR_ID = "sn60_bitsec"
 DEFAULT_SN60_DUEL_SCHEMA_VERSION = 2

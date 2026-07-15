@@ -118,7 +118,7 @@ def test_value_object_defaults() -> None:
     env = EnvSpec()
     assert env.network == "relay_only"
     assert env.allowed_hosts == () and env.required_secrets == ()
-    assert env.pinned_model is None and env.resources == {}
+    assert env.resources == {}
 
     card = ScoreCard(comparable=0.5, passed=True)
     assert card.beats_threshold == 0.0 and card.metrics == {}

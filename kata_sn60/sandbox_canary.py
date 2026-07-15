@@ -15,7 +15,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from kata.screening_system.mutation_canary import rename_solidity_identifiers
+from kata_sn60.mutation_canary import rename_solidity_identifiers
 
 # Source extensions we rename. Renaming is identifier-based, so it is language-agnostic
 # enough to break fingerprints in Solidity/Rust/Cairo/Vyper benchmark projects.

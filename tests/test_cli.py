@@ -242,6 +242,8 @@ def test_round_cli_parses_candidates_and_emits_json(monkeypatch, capsys) -> None
     exit_code = main(
         [
             "round",
+            "--evaluator",
+            "sn60_bitsec",
             "--king-path",
             "/king",
             "--candidate",
@@ -314,6 +316,8 @@ def test_round_cli_supports_candidate_only_mode(monkeypatch, capsys) -> None:
     exit_code = main(
         [
             "round",
+            "--evaluator",
+            "sn60_bitsec",
             "--king-path",
             "/king",
             "--candidate",
@@ -389,6 +393,8 @@ def test_round_cli_samples_problems_when_keys_omitted(tmp_path, monkeypatch, cap
     exit_code = main(
         [
             "round",
+            "--evaluator",
+            "sn60_bitsec",
             "--king-path",
             str(king),
             "--candidate",

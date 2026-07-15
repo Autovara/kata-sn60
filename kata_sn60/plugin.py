@@ -28,6 +28,8 @@ from kata_sn60.sn60_bitsec import (
     Sn60SandboxSource,
     Sn60VariantSummary,
     _sn60_use_tee_room,
+    benchmark_version_key,
+    build_cached_king_hooks,
     build_default_evaluation_hook,
     build_default_execution_hook,
     hash_bundle_root,
@@ -57,6 +59,7 @@ class Sn60Problems:
     sandbox_source: Sn60SandboxSource
     replicas_per_project: int
     run_id: str
+    round_cache_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,9 +95,9 @@ class Sn60BitsecPlugin(SubnetPlugin):
         self._scorer_version = scorer_version
 
     def environment_spec(self) -> EnvSpec:
-        # SN60 agents run sealed except for the pinned-model inference relay. Execution is the local
-        # sandbox unless the sealed-room (TEE) path is opted in (KATA_SN60_USE_TEE_ROOM) -- the
-        # platform reads EnvSpec.execution to know which backend the lane uses.
+        # SN60 agents run sealed except for the evaluator's inference gateway.
+        # Execution is the local sandbox unless the sealed-room (TEE) path is opted
+        # in (KATA_SN60_USE_TEE_ROOM); EnvSpec.execution selects the backend.
         return EnvSpec(
             network="relay_only",
             execution="tee" if _sn60_use_tee_room() else "sandbox",
@@ -131,6 +134,7 @@ class Sn60BitsecPlugin(SubnetPlugin):
             sandbox_source=sandbox_source,
             replicas_per_project=int(config.get("replicas_per_project", 1)),
             run_id=seed,
+            round_cache_path=config.get("round_cache_path"),
         )
 
     def benchmark_identity(self, problems: Sn60Problems) -> str:
@@ -143,7 +147,7 @@ class Sn60BitsecPlugin(SubnetPlugin):
         self, *, agent_path: str, problems: Sn60Problems, context: RunContext
     ) -> Sn60RawRun:
         source = problems.sandbox_source
-        execution_hook = self._execution_hook or build_default_execution_hook(source)
+        execution_hook = self.resolve_execution_hook(source)
         evaluation_hook = self._evaluation_hook or build_default_evaluation_hook(source)
         artifact_root = Path(agent_path).expanduser().resolve()
         label = context.label
@@ -151,6 +155,16 @@ class Sn60BitsecPlugin(SubnetPlugin):
         # "king"/"candidate" so execution/evaluation hooks see the same variant as the
         # legacy duel path.
         variant_name = "king" if label == "king" else "candidate"
+        if label == "king" and problems.round_cache_path:
+            execution_hook, evaluation_hook = build_cached_king_hooks(
+                scoreboard_path=problems.round_cache_path,
+                king_hash=hash_bundle_root(artifact_root),
+                benchmark_version=benchmark_version_key(
+                    source.scorer_version, source.benchmark_sha256
+                ),
+                base_execution_hook=execution_hook,
+                base_evaluation_hook=evaluation_hook,
+            )
 
         # Emit live per-replica progress through the generic callback, accumulating
         # SN60's running metrics + per-problem breakdown so the board fills in live.

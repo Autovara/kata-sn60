@@ -250,7 +250,9 @@ def test_validate_submission_ignores_python_cache_artifacts(tmp_path, monkeypatc
     assert result.is_valid
 
 
-def test_validate_submission_rejects_validator_env_reference(tmp_path, monkeypatch) -> None:
+def test_validate_submission_allows_miner_owned_provider_env_reference(
+    tmp_path, monkeypatch
+) -> None:
     reasons = validation_reasons(
         tmp_path,
         monkeypatch,
@@ -261,7 +263,7 @@ def test_validate_submission_rejects_validator_env_reference(tmp_path, monkeypat
             "    return {\"vulnerabilities\": []}\n"
         ),
     )
-    assert any("secret env vars" in reason for reason in reasons)
+    assert not any("secret env vars" in reason for reason in reasons)
 
 
 def test_validate_submission_rejects_hardcoded_secret(tmp_path, monkeypatch) -> None:
@@ -307,7 +309,9 @@ def test_validate_submission_allows_dict_unpack_sampling_override_source(
     assert not any("temperature" in reason for reason in reasons)
 
 
-def test_validate_submission_rejects_provider_endpoint(tmp_path, monkeypatch) -> None:
+def test_validate_submission_allows_miner_owned_provider_endpoint(
+    tmp_path, monkeypatch
+) -> None:
     reasons = validation_reasons(
         tmp_path,
         monkeypatch,
@@ -317,7 +321,7 @@ def test_validate_submission_rejects_provider_endpoint(tmp_path, monkeypatch) ->
             "    return {\"vulnerabilities\": []}\n"
         ),
     )
-    assert any("provider endpoints" in reason for reason in reasons)
+    assert not any("provider endpoints" in reason for reason in reasons)
 
 
 def test_validate_submission_reports_malformed_metadata(tmp_path, monkeypatch) -> None:
