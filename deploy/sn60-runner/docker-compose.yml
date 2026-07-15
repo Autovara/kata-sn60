@@ -2,11 +2,17 @@ services:
   kata-sn60-runner:
     image: docker.io/carloscosimano/kata-sn60-runner:v9
     ports:
+      # /run runs a caller-supplied agent with a decrypted inference key — it MUST NOT be publicly
+      # reachable. It is authenticated (HMAC over the body, see room.auth), but ALSO firewall this
+      # port so only the validator host can reach it (e.g. bind to a private interface / security
+      # group). Do not leave 8080 open to the internet.
       - "8080:8080"
     environment:
-      # The miner's inference key (sealed secret delivered to the attested room).
-      - INFERENCE_API_KEY=${INFERENCE_API_KEY}
-      - INFERENCE_API=${INFERENCE_API}
+      # Shared secret the room requires on /run so only this validator can invoke a run
+      # (delivered sealed, like the other secrets). Must match the validator's KATA_ROOM_AUTH_SECRET.
+      - KATA_ROOM_AUTH_SECRET=${KATA_ROOM_AUTH_SECRET}
+      # NOTE: there is intentionally NO plaintext INFERENCE_API_KEY here — inference keys arrive
+      # per request, sealed to the room, and are decrypted inside it (see room.sealing).
       # Registry read:packages login to pull the private problem image (sealed secret).
       - GHCR_USER=${GHCR_USER}
       - GHCR_TOKEN=${GHCR_TOKEN}

@@ -21,11 +21,28 @@ KATA_SN60_USE_TEE_ROOM.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
+
+# Shared HMAC secret the room requires on /run (room.auth). Must match the room's
+# KATA_ROOM_AUTH_SECRET so only this validator can invoke a run.
+ROOM_AUTH_SECRET_ENV = "KATA_ROOM_AUTH_SECRET"
+ROOM_SIGNATURE_HEADER = "X-Kata-Signature"
+
+
+def room_signature(body: bytes) -> str:
+    """HMAC-SHA256 hex of the exact /run request body, keyed by the shared room secret."""
+    secret = os.environ.get(ROOM_AUTH_SECRET_ENV, "").strip().encode()
+    if not secret:
+        raise RuntimeError(
+            f"{ROOM_AUTH_SECRET_ENV} is not set; cannot authenticate to the sealed room."
+        )
+    return hmac.new(secret, body, hashlib.sha256).hexdigest()
 
 
 def canonical(obj) -> bytes:
@@ -238,7 +255,11 @@ class HttpRoomLauncher:
         }).encode()
         req = urllib.request.Request(
             f"{self.base_url}/run", data=payload,
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers={
+                "Content-Type": "application/json",
+                ROOM_SIGNATURE_HEADER: room_signature(payload),
+            },
+            method="POST",
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:

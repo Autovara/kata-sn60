@@ -3,15 +3,33 @@
 Uses fake launcher/verifier so the whole flow is testable without a real TEE.
 """
 import hashlib
+import hmac
+
+import pytest
 
 from kata_sn60.execution.tee_room import (
+    ROOM_AUTH_SECRET_ENV,
     RoomPolicy,
     RoomResult,
     VerifiedQuote,
     canonical,
     evaluate_candidate_in_room,
+    room_signature,
     verify_room_run,
 )
+
+
+def test_room_signature_matches_the_rooms_hmac(monkeypatch):
+    # The client must sign /run bodies exactly as the room verifies them (HMAC-SHA256 hex).
+    monkeypatch.setenv(ROOM_AUTH_SECRET_ENV, "s3cret")
+    body = b'{"nonce":"aa","project_key":"p"}'
+    assert room_signature(body) == hmac.new(b"s3cret", body, hashlib.sha256).hexdigest()
+
+
+def test_room_signature_requires_the_shared_secret(monkeypatch):
+    monkeypatch.delenv(ROOM_AUTH_SECRET_ENV, raising=False)
+    with pytest.raises(RuntimeError, match=ROOM_AUTH_SECRET_ENV):
+        room_signature(b"x")
 
 APPROVED = "approved-runner-image"
 POLICY = RoomPolicy(approved_measurements=frozenset({APPROVED}))
