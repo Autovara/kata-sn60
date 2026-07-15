@@ -26,15 +26,12 @@ services:
       - GHCR_TOKEN=${GHCR_TOKEN}
       # JSON map: each allowed project key -> sha256:<64 hex>. There is no :latest fallback.
       - KATA_SN60_TEE_IMAGE_DIGESTS_JSON=${KATA_SN60_TEE_IMAGE_DIGESTS_JSON}
-      # --- in-room miner-funded inference gateway ---
-      # The gateway forwards the miner's key and request without setting a model,
-      # sampling policy, token budget, call budget, or retry budget.
-      - KATA_INFERENCE_GATEWAY_UPSTREAM=${KATA_INFERENCE_GATEWAY_UPSTREAM}
+      # --- in-room miner-funded multi-provider gateway ---
+      # JSON registry of exact, operator-approved provider routes. Each miner's encrypted descriptor
+      # selects one id from this registry; the miner never supplies an arbitrary endpoint or plaintext
+      # key. The gateway does not set a model, sampling policy, token/call budget, or retry budget.
+      - KATA_INFERENCE_GATEWAY_PROVIDER_ROUTES_JSON=${KATA_INFERENCE_GATEWAY_PROVIDER_ROUTES_JSON}
       - KATA_INFERENCE_GATEWAY_TIMEOUT=${KATA_INFERENCE_GATEWAY_TIMEOUT}
-      - KATA_INFERENCE_GATEWAY_DIRECT_UPSTREAM=${KATA_INFERENCE_GATEWAY_DIRECT_UPSTREAM}
-      - KATA_INFERENCE_GATEWAY_DIRECT_KEY_PREFIXES=${KATA_INFERENCE_GATEWAY_DIRECT_KEY_PREFIXES}
-      - KATA_INFERENCE_GATEWAY_DIRECT_AUTH_HEADER=${KATA_INFERENCE_GATEWAY_DIRECT_AUTH_HEADER}
-      - KATA_INFERENCE_GATEWAY_DIRECT_AUTH_VALUE_TEMPLATE=${KATA_INFERENCE_GATEWAY_DIRECT_AUTH_VALUE_TEMPLATE}
     volumes:
       # dstack guest-agent socket -- lets the app call get_quote.
       - /var/run/dstack.sock:/var/run/dstack.sock

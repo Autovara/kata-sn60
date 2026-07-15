@@ -12,8 +12,12 @@ discovers and loads it with no code change. Install it into the engine's environ
 
 Production is TEE-first: without configuration, SN60 selects the Phala sealed-room backend and
 requires `KATA_SN60_ROOM_URL`, room authentication, and approved TEE measurements. The miner's
-sealed credential is the only credential an agent receives. Local Docker execution is only for
-development and must be selected explicitly with `KATA_SN60_EXECUTION_BACKEND=sandbox`.
+encrypted provider descriptor is the only inference credential an agent receives. It is bound to the
+exact submission bundle inside the room, so the validator cannot reuse public ciphertext with another
+agent. The generic runner routes it only to an operator-approved provider id, allowing providers such
+as OpenRouter, Chutes, AkashML, and future reviewed providers to run in parallel. Local Docker
+execution is only for development and must be selected explicitly with
+`KATA_SN60_EXECUTION_BACKEND=sandbox`.
 
 The upstream sandbox is pinned to commit
 `069ae1e2f152370fa97f3397d8a8f8aed5a78539`. A production operator must deliberately provide a

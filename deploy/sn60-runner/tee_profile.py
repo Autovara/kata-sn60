@@ -14,19 +14,16 @@ import sys
 import tempfile
 from pathlib import Path
 
-from room.bundle import extract_submission_bundle
 from room.inference_network import (
     GHCR,
     INF_NET,
-    INFERENCE_GATEWAY_ALIAS,
-    INFERENCE_GATEWAY_PORT,
     docker,
     ensure_inference_network_once,
     ghcr_login,
+    inference_gateway_url,
     start_inference_gateway_once,
 )
-from room.profile import TeeJobResult
-from room.sealing import resolve_inference_key
+from room.profile import MinerInferenceCredential, TeeJobResult
 
 FIXTURE_AGENT = "/app/fixture_agent.py"
 
@@ -53,14 +50,16 @@ class Sn60TeeProfile:
         self,
         *,
         project_key: str,
-        sealed_key: str = "",
-        bundle_b64: str = "",
+        credential: MinerInferenceCredential | None = None,
+        bundle_root: str | None = None,
         job_id: str,
         bundle_sha256: str,
     ) -> TeeJobResult:
         if project_key == self.fixture_project:
             return self._run_fixture(project_key, job_id)
-        return self._run_real(project_key, sealed_key, bundle_b64, job_id)
+        if bundle_root is None:
+            raise RuntimeError("real SN60 TEE execution requires an extracted candidate bundle")
+        return self._run_real(project_key, credential, Path(bundle_root), job_id)
 
     def _run_fixture(self, project_key: str, job_id: str) -> TeeJobResult:
         with tempfile.TemporaryDirectory() as directory:
@@ -89,14 +88,13 @@ class Sn60TeeProfile:
             },
         )
 
-    def _prepare_agent(self, workdir: Path, bundle_b64: str):
+    def _prepare_agent(self, bundle_dir: Path):
         """Return (cp_source, container_dest, extra_env) for the agent to run.
 
-        The room always receives the miner's candidate bundle. Bounded extraction is part of the
-        generic runner so a signed request cannot turn into a tar-bomb or traversal attack.
+        The generic room already bounded, extracted, and credential-bound the miner's candidate
+        bundle before calling this profile. This profile only copies that verified directory into
+        the isolated problem container.
         """
-        bundle_dir = workdir / "bundle"
-        extract_submission_bundle(bundle_b64, bundle_dir)
         if not (bundle_dir / "agent.py").is_file():
             raise RuntimeError("bundle has no agent.py")
         return (
@@ -109,7 +107,11 @@ class Sn60TeeProfile:
         )
 
     def _run_real(
-        self, project_key: str, sealed_key: str, bundle_b64: str, job_id: str
+        self,
+        project_key: str,
+        credential: MinerInferenceCredential | None,
+        bundle_dir: Path,
+        job_id: str,
     ) -> TeeJobResult:
         """Pull + run the real bitsec problem image with the MINER'S agent, mirroring the sandbox
         executor. Uses `docker cp` (not a bind mount): with docker-in-the-room the daemon resolves
@@ -123,29 +125,33 @@ class Sn60TeeProfile:
 
         # Bring up the in-room gateway + sealed network. The gateway forwards the
         # miner's request and decrypted key without imposing a platform model or
-        # token/call policy.
+        # token/call policy. Its signed URL binds the encrypted provider choice.
         start_inference_gateway_once()
         ensure_inference_network_once()
 
         container_suffix = hashlib.sha256(f"{project_key}:{job_id}".encode()).hexdigest()[:20]
         container = f"kata-sn60-{container_suffix}"
         docker(["rm", "-f", container])
-        # No deploy-time key exists. An inference-free agent may intentionally omit its ciphertext;
-        # it receives an empty credential, never an operator-funded fallback.
-        inference_key = resolve_inference_key(sealed_key, required=False)
-        # The agent talks ONLY to the gateway (sealed net); it carries the miner's key.
+        # No deploy-time key exists. An inference-free agent receives empty inference settings,
+        # never an operator-funded fallback. A supplied descriptor is decrypted only by the generic
+        # room and its signed route prevents the agent from changing provider selection.
+        inference_key = credential.api_key if credential else ""
+        inference_api = (
+            inference_gateway_url(job_id, credential.provider) if credential is not None else ""
+        )
+        # The agent talks ONLY to the gateway (sealed net); it carries the miner's own key.
         env_args = [
             "-e",
             f"PROJECT_KEY={project_key}",
             "-e",
             f"INFERENCE_API_KEY={inference_key}",
             "-e",
-            f"INFERENCE_API=http://{INFERENCE_GATEWAY_ALIAS}:{INFERENCE_GATEWAY_PORT}/j/{job_id}",
+            f"INFERENCE_API={inference_api}",
         ]
         try:
             with tempfile.TemporaryDirectory() as directory:
                 workdir = Path(directory)
-                cp_src, cp_dst, extra_env = self._prepare_agent(workdir, bundle_b64)
+                cp_src, cp_dst, extra_env = self._prepare_agent(bundle_dir)
                 for k, v in extra_env.items():
                     env_args += ["-e", f"{k}={v}"]
                 create = docker(
