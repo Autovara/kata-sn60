@@ -74,7 +74,11 @@ class Sn60TeeProfile:
                 "PROJECT_KEY": project_key,
             }
             subprocess.run(
-                [sys.executable, FIXTURE_AGENT], env=env, capture_output=True, text=True, timeout=120
+                [sys.executable, FIXTURE_AGENT],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
             report = json.loads(report_file.read_text())
         return TeeJobResult(
@@ -97,10 +101,14 @@ class Sn60TeeProfile:
         extract_submission_bundle(bundle_b64, bundle_dir)
         if not (bundle_dir / "agent.py").is_file():
             raise RuntimeError("bundle has no agent.py")
-        return str(bundle_dir), "/kata_bundle", {
-            "AGENT_FILE": "/kata_bundle/agent.py",
-            "PYTHONPATH": "/kata_bundle",
-        }
+        return (
+            str(bundle_dir),
+            "/kata_bundle",
+            {
+                "AGENT_FILE": "/kata_bundle/agent.py",
+                "PYTHONPATH": "/kata_bundle",
+            },
+        )
 
     def _run_real(
         self, project_key: str, sealed_key: str, bundle_b64: str, job_id: str
@@ -130,9 +138,12 @@ class Sn60TeeProfile:
         inference_key = resolve_inference_key(sealed_key, required=False)
         # The agent talks ONLY to the relay (sealed net); the relay carries the miner's key.
         env_args = [
-            "-e", f"PROJECT_KEY={project_key}",
-            "-e", f"INFERENCE_API_KEY={inference_key}",
-            "-e", f"INFERENCE_API=http://{RELAY_ALIAS}:{RELAY_PORT}/j/{job_id}",
+            "-e",
+            f"PROJECT_KEY={project_key}",
+            "-e",
+            f"INFERENCE_API_KEY={inference_key}",
+            "-e",
+            f"INFERENCE_API=http://{RELAY_ALIAS}:{RELAY_PORT}/j/{job_id}",
         ]
         try:
             with tempfile.TemporaryDirectory() as directory:
@@ -140,27 +151,41 @@ class Sn60TeeProfile:
                 cp_src, cp_dst, extra_env = self._prepare_agent(workdir, bundle_b64)
                 for k, v in extra_env.items():
                     env_args += ["-e", f"{k}={v}"]
-                create = docker([
-                    "create", "--name", container, "--network", INF_NET, *env_args,
-                    "--memory", "512m", "--cpus", "0.25", "--pids-limit", "64",
-                    image,
-                ])
+                create = docker(
+                    [
+                        "create",
+                        "--name",
+                        container,
+                        "--network",
+                        INF_NET,
+                        *env_args,
+                        "--memory",
+                        "512m",
+                        "--cpus",
+                        "0.25",
+                        "--pids-limit",
+                        "64",
+                        image,
+                    ]
+                )
                 if create.returncode != 0:
                     raise RuntimeError(f"create failed: {create.stderr[:400]}")
                 cp_in = docker(["cp", cp_src, f"{container}:{cp_dst}"])
                 if cp_in.returncode != 0:
                     raise RuntimeError(f"cp agent in failed: {cp_in.stderr[:400]}")
                 start = docker(["start", "-a", container], timeout=600)  # -a waits for exit
-                cp_out = docker(["cp", f"{container}:/app/report.json", str(workdir / "report.json")])
+                cp_out = docker(
+                    ["cp", f"{container}:/app/report.json", str(workdir / "report.json")]
+                )
                 if cp_out.returncode != 0:
                     raise RuntimeError(
                         "no report.json. "
                         f"start stderr: {start.stderr[:500]} stdout: {start.stdout[:300]}"
                     )
                 report = json.loads((workdir / "report.json").read_text())
-            digest = docker([
-                "inspect", "--format", "{{index .RepoDigests 0}}", image
-            ]).stdout.strip()
+            digest = docker(
+                ["inspect", "--format", "{{index .RepoDigests 0}}", image]
+            ).stdout.strip()
             if not digest or not digest.endswith(image.rsplit("@", 1)[1]):
                 raise RuntimeError("pulled problem image did not retain its configured digest")
             return TeeJobResult(
