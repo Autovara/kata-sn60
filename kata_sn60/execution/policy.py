@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 
 EXECUTION_BACKEND_ENV = "KATA_SN60_EXECUTION_BACKEND"
-LEGACY_TEE_ENV = "KATA_SN60_USE_TEE_ROOM"
 _BACKENDS = frozenset({"tee", "sandbox"})
 
 
@@ -24,12 +23,6 @@ def resolve_execution_backend() -> str:
             )
         return configured
 
-    # Preserve existing deployments during migration.  An explicitly supplied
-    # legacy false value means the operator deliberately selected the sandbox;
-    # new deployments should use KATA_SN60_EXECUTION_BACKEND instead.
-    legacy = os.environ.get(LEGACY_TEE_ENV, "").strip().lower()
-    if legacy:
-        return "tee" if legacy in {"1", "true", "yes", "on"} else "sandbox"
     return "tee"
 
 

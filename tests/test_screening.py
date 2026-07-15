@@ -161,7 +161,7 @@ def test_validate_sn60_static_screening_allows_helper_files_but_rejects_leak_tok
 def test_tee_allows_an_inference_free_bundle_but_validates_supplied_ciphertext(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("KATA_SN60_USE_TEE_ROOM", "1")
+    monkeypatch.delenv("KATA_SN60_EXECUTION_BACKEND", raising=False)
     bundle_root = tmp_path / "candidate"
     write_bundle(bundle_root, VALID_AGENT_SOURCE)
 

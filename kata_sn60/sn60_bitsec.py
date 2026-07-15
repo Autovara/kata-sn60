@@ -992,11 +992,6 @@ def build_default_execution_hook(
     return _execute
 
 
-def _sn60_use_tee_room() -> bool:
-    """Compatibility shim for callers that still import the old helper."""
-    return tee_execution_enabled()
-
-
 def resolve_sn60_room_url() -> str:
     url = os.environ.get("KATA_SN60_ROOM_URL", "").strip()
     if not url:

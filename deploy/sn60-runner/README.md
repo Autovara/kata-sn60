@@ -22,7 +22,7 @@ candidate-provided key for each job. There is no validator or deploy-time infere
 3. In Phala, deliver `KATA_ROOM_AUTH_SECRET`, `GHCR_USER`, and `GHCR_TOKEN` as sealed secrets.
    Set `KATA_SN60_TEE_IMAGE_DIGESTS_JSON` to a JSON object mapping every permitted Bitsec project
    key to its GHCR `sha256:<digest>`. Configure the gateway upstream/provider routes:
-   `KATA_INFERENCE_GATEWAY_UPSTREAM` for proxy-supported keys, or
+   `KATA_INFERENCE_GATEWAY_UPSTREAM` for an OpenAI-compatible proxy route, or
    `KATA_INFERENCE_GATEWAY_DIRECT_KEY_PREFIXES` plus
    `KATA_INFERENCE_GATEWAY_DIRECT_UPSTREAM` for another OpenAI-compatible provider. The gateway
    forwards the miner's own key and requested model, sampling, token, and call settings unchanged.

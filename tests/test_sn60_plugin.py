@@ -103,7 +103,6 @@ def test_sn60_plugin_identity_and_env() -> None:
 
 def test_environment_spec_execution_uses_explicit_development_sandbox(monkeypatch) -> None:
     plugin = Sn60BitsecPlugin()
-    monkeypatch.delenv("KATA_SN60_USE_TEE_ROOM", raising=False)
     monkeypatch.delenv("KATA_SN60_EXECUTION_BACKEND", raising=False)
     assert plugin.environment_spec().execution == "tee"
     monkeypatch.setenv("KATA_SN60_EXECUTION_BACKEND", "sandbox")

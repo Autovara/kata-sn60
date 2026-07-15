@@ -15,8 +15,8 @@ inside the room, so this module needs no crypto -- only stdlib. The raw quote si
 check is delegated to a QuoteVerifier (default: the dcap-qvl CLI), so the logic is testable
 with a fake verifier.
 
-Ported from the tested sealed-room spike (now generalized into kata-tee-runner). Gated behind
-KATA_SN60_USE_TEE_ROOM.
+The generic runner handles the sealed network and miner-funded inference gateway;
+this module is only the SN60 validator-side room protocol and attestation check.
 """
 
 from __future__ import annotations

@@ -3,9 +3,7 @@
 Implements the generic ``room.profile.TeeJobProfile`` seam. The bitsec problem is a private GHCR
 image; the miner's agent runs against it in a resource-capped container, talking only to the in-room
 inference gateway, and writes ``report.json`` (its findings). Sealing, the gateway/sealed network,
-attestation, and HTTP are generic-room responsibilities; this file is SN60-specific.
-
-This file is SN60-specific and moves to ``kata-sn60`` in T2; for now it rides in the runner repo."""
+attestation, and HTTP are generic-room responsibilities; this file is SN60-specific."""
 
 import hashlib
 import json
