@@ -24,6 +24,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -48,6 +49,15 @@ def room_signature(body: bytes) -> str:
 def canonical(obj) -> bytes:
     """Stable byte form of the answer so its hash matches on both sides."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
+
+
+def binding_payload(*, report: object, bundle_sha256: str, provenance: dict[str, object]) -> dict:
+    """Must remain byte-for-byte equivalent to ``room.attest.binding_payload``."""
+    return {
+        "report": report,
+        "bundle_sha256": bundle_sha256,
+        "provenance": provenance,
+    }
 
 
 # -- attestation verification ------------------------------------------------
@@ -82,6 +92,8 @@ def verify_room_run(
     report: object,
     nonce: bytes,
     project_key: str,
+    bundle_sha256: str,
+    provenance: dict[str, object],
     policy: RoomPolicy,
     verifier: QuoteVerifier,
     seen_nonces: set | None = None,
@@ -91,8 +103,16 @@ def verify_room_run(
         return AttestationResult(False, f"quote not verified: {vq.detail}")
     if vq.measurement not in policy.approved_measurements:
         return AttestationResult(False, f"runner image not approved: {vq.measurement}")
-    answer_hash = hashlib.sha256(canonical(report)).digest()
-    expected = hashlib.sha256(nonce + project_key.encode() + answer_hash).digest()
+    binding_hash = hashlib.sha256(
+        canonical(
+            binding_payload(
+                report=report,
+                bundle_sha256=bundle_sha256,
+                provenance=provenance,
+            )
+        )
+    ).digest()
+    expected = hashlib.sha256(nonce + project_key.encode() + binding_hash).digest()
     if vq.report_data[:32] != expected:
         return AttestationResult(False, "quote does not cover this answer (swap or replay)")
     if seen_nonces is not None:
@@ -172,12 +192,14 @@ class DcapQvlVerifier:
 class RoomResult:
     report: object
     quote_hex: str
+    bundle_sha256: str
+    provenance: dict[str, object]
 
 
 class RoomLauncher(Protocol):
     def launch_and_run(
         self, *, candidate_id: str, agent_ref: str, project_key: str,
-        nonce: bytes, sealed_key_ref: str,
+        nonce: bytes, sealed_key_ref: str, bundle_sha256: str,
     ) -> RoomResult: ...
 
 
@@ -195,6 +217,7 @@ def evaluate_candidate_in_room(
     project_key: str,
     sealed_key_ref: str,
     nonce: bytes,
+    bundle_sha256: str,
     policy: RoomPolicy,
     launcher: RoomLauncher,
     verifier: QuoteVerifier,
@@ -203,14 +226,17 @@ def evaluate_candidate_in_room(
     try:
         result = launcher.launch_and_run(
             candidate_id=candidate_id, agent_ref=agent_ref, project_key=project_key,
-            nonce=nonce, sealed_key_ref=sealed_key_ref,
+            nonce=nonce, sealed_key_ref=sealed_key_ref, bundle_sha256=bundle_sha256,
         )
     except Exception as exc:  # noqa: BLE001 - a room failure is a failed run, not a crash
         return CandidateOutcome(False, None, f"room run failed: {exc}")
+    if result.bundle_sha256 != bundle_sha256:
+        return CandidateOutcome(False, None, "room returned a different candidate bundle hash")
 
     verdict = verify_room_run(
         quote_hex=result.quote_hex, report=result.report, nonce=nonce,
-        project_key=project_key, policy=policy, verifier=verifier, seen_nonces=seen_nonces,
+        project_key=project_key, bundle_sha256=bundle_sha256, provenance=result.provenance,
+        policy=policy, verifier=verifier, seen_nonces=seen_nonces,
     )
     if not verdict.accepted:
         return CandidateOutcome(False, None, verdict.reason)
@@ -245,13 +271,20 @@ class HttpRoomLauncher:
 
     def launch_and_run(
         self, *, candidate_id: str, agent_ref: str, project_key: str,
-        nonce: bytes, sealed_key_ref: str,
+        nonce: bytes, sealed_key_ref: str, bundle_sha256: str,
     ) -> RoomResult:
+        issued_at = int(time.time())
+        lifetime = int(os.environ.get("KATA_SN60_ROOM_REQUEST_LIFETIME_SECONDS", "900"))
+        if not 1 <= lifetime <= 1_200:
+            raise RuntimeError("KATA_SN60_ROOM_REQUEST_LIFETIME_SECONDS must be 1..1200")
         payload = json.dumps({
             "nonce": nonce.hex(),
             "project_key": project_key,
             "sealed_key": sealed_key_ref,
             "bundle": _bundle_tar_b64(agent_ref),   # the miner's real agent, run in the room
+            "bundle_sha256": bundle_sha256,
+            "issued_at": issued_at,
+            "expires_at": issued_at + lifetime,
         }).encode()
         req = urllib.request.Request(
             f"{self.base_url}/run", data=payload,
@@ -269,6 +302,16 @@ class HttpRoomLauncher:
             raise RuntimeError(f"room HTTP {exc.code}: {body}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"could not reach room: {exc.reason}") from exc
-        if "report" not in data or "quote" not in data:
+        if (
+            "report" not in data
+            or "quote" not in data
+            or data.get("bundle_sha256") != bundle_sha256
+            or not isinstance(data.get("provenance"), dict)
+        ):
             raise RuntimeError(f"room error: {data.get('error', data)}")
-        return RoomResult(report=data["report"], quote_hex=data["quote"])
+        return RoomResult(
+            report=data["report"],
+            quote_hex=data["quote"],
+            bundle_sha256=data["bundle_sha256"],
+            provenance=data["provenance"],
+        )

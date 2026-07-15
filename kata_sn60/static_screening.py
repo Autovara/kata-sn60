@@ -21,7 +21,7 @@ from kata.screening_system.python_ast import (
     agent_main_returns_direct_empty_report,
 )
 from kata.screening_system.rules import SECRET_PATTERN, finding_reasons, reject_finding
-from kata.submission_system.bundle import AGENT_ENTRY_FILENAME
+from kata.submission_system.bundle import AGENT_ENTRY_FILENAME, SEALED_KEY_FILENAME
 
 BENCHMARK_LEAK_TOKENS = (
     "curated-highs-only",
@@ -67,6 +67,27 @@ def screen_sn60_static_bundle(bundle_files: dict[str, str]) -> list[ScreeningFin
                     path=relative_path,
                 )
             )
+
+    # TEE rounds are miner-paid. A bundle may intentionally be inference-free (the maintained
+    # zero-cost baseline is one example), but when a miner supplies a key it must be ciphertext for
+    # the room. The runner has no platform-key fallback, so an omitted key can never spend operator
+    # funds; inference attempts without one simply receive no usable upstream credential.
+    if _tee_execution_enabled():
+        sealed_key = str(bundle_files.get(SEALED_KEY_FILENAME) or "").strip()
+        if sealed_key:
+            try:
+                encrypted = bytes.fromhex(sealed_key)
+            except ValueError:
+                encrypted = b""
+            if len(encrypted) < 32:
+                findings.append(
+                    reject_finding(
+                        "sn60.tee_sealed_key_invalid",
+                        "sealed_inference_key must be a non-trivial hexadecimal ciphertext for "
+                        "the approved TEE room.",
+                        path=SEALED_KEY_FILENAME,
+                    )
+                )
 
     agent_source = bundle_files.get(AGENT_ENTRY_FILENAME)
     if agent_source is None:
@@ -153,6 +174,17 @@ def screen_sn60_static_bundle(bundle_files: dict[str, str]) -> list[ScreeningFin
                 )
             )
     return dedupe_findings(findings)
+
+
+def _tee_execution_enabled() -> bool:
+    import os
+
+    return os.environ.get("KATA_SN60_USE_TEE_ROOM", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def validate_sn60_static_screening(candidate_root: str | Path) -> list[str]:

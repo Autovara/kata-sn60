@@ -1,21 +1,31 @@
 services:
   kata-sn60-runner:
-    image: docker.io/carloscosimano/kata-sn60-runner:v9
+    # Digest, not a mutable tag: the value must match the approved TEE measurement policy.
+    image: ${KATA_SN60_RUNNER_IMAGE:?Set an immutable runner image, for example registry/runner@sha256:...}
     ports:
       # /run runs a caller-supplied agent with a decrypted inference key — it MUST NOT be publicly
       # reachable. It is authenticated (HMAC over the body, see room.auth), but ALSO firewall this
       # port so only the validator host can reach it (e.g. bind to a private interface / security
       # group). Do not leave 8080 open to the internet.
-      - "8080:8080"
+      - "${KATA_ROOM_BIND_ADDRESS:-127.0.0.1}:8080:8080"
     environment:
       # Shared secret the room requires on /run so only this validator can invoke a run
       # (delivered sealed, like the other secrets). Must match the validator's KATA_ROOM_AUTH_SECRET.
       - KATA_ROOM_AUTH_SECRET=${KATA_ROOM_AUTH_SECRET}
+      # Keep diagnostics off in production. /pull-test is otherwise a signed POST-only endpoint.
+      - KATA_ROOM_ENABLE_DIAGNOSTICS=false
+      - KATA_ROOM_MAX_REQUEST_LIFETIME_SECONDS=1200
+      - KATA_ROOM_MAX_REQUEST_BYTES=1048576
+      - KATA_ROOM_MAX_COMPRESSED_BUNDLE_BYTES=524288
+      - KATA_ROOM_MAX_EXTRACTED_BUNDLE_BYTES=262144
+      - KATA_ROOM_MAX_BUNDLE_FILES=16
       # NOTE: there is intentionally NO plaintext INFERENCE_API_KEY here — inference keys arrive
       # per request, sealed to the room, and are decrypted inside it (see room.sealing).
       # Registry read:packages login to pull the private problem image (sealed secret).
       - GHCR_USER=${GHCR_USER}
       - GHCR_TOKEN=${GHCR_TOKEN}
+      # JSON map: each allowed project key -> sha256:<64 hex>. There is no :latest fallback.
+      - KATA_SN60_TEE_IMAGE_DIGESTS_JSON=${KATA_SN60_TEE_IMAGE_DIGESTS_JSON}
       # --- in-room model-pinning relay (real, fair inference) ---
       # The relay forwards the miner's key DIRECTLY to a provider. Point it at a provider
       # serving the pinned model; e.g. AkashML + qwen3.6.

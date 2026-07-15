@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from statistics import fmean
 from typing import Callable, NamedTuple, TypedDict
+from urllib.parse import urlparse
 
 from kata.evaluators.king_cache import (
     KingScoreboard,
@@ -998,6 +999,15 @@ def resolve_sn60_room_url() -> str:
     url = os.environ.get("KATA_SN60_ROOM_URL", "").strip()
     if not url:
         raise RuntimeError("KATA_SN60_USE_TEE_ROOM is set but KATA_SN60_ROOM_URL is empty")
+    parsed = urlparse(url)
+    allow_insecure = os.environ.get("KATA_SN60_ALLOW_INSECURE_ROOM_URL", "").strip().lower()
+    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+        raise RuntimeError("KATA_SN60_ROOM_URL must be an absolute HTTPS URL")
+    if parsed.scheme != "https" and allow_insecure not in {"1", "true", "yes", "on"}:
+        raise RuntimeError(
+            "KATA_SN60_ROOM_URL must use HTTPS (set "
+            "KATA_SN60_ALLOW_INSECURE_ROOM_URL=1 only for local tests)"
+        )
     return url
 
 
@@ -1014,11 +1024,11 @@ def resolve_sn60_room_policy():
 
 
 def resolve_candidate_sealed_key(bundle_root: str) -> str:
-    """The candidate's sealed inference-key blob: from the submission bundle, else env."""
+    """Return this candidate's sealed inference-key blob, never a platform fallback."""
     path = Path(bundle_root).expanduser().resolve() / "sealed_inference_key"
     if path.exists():
         return path.read_text(encoding="utf-8").strip()
-    return os.environ.get("KATA_SN60_SEALED_INFERENCE_KEY", "").strip()
+    return ""
 
 
 def build_tee_room_execution_hook(source: Sn60SandboxSource) -> Sn60ExecutionHook:
@@ -1040,14 +1050,13 @@ def build_tee_room_execution_hook(source: Sn60SandboxSource) -> Sn60ExecutionHoo
 
     def _execute(context: Sn60ReplicaContext) -> dict[str, object]:
         sealed_key = resolve_candidate_sealed_key(context.bundle_root)
-        if not sealed_key:
-            return {"success": False, "error": "no sealed inference key for this candidate."}
         outcome = evaluate_candidate_in_room(
             candidate_id=context.variant_name,
             agent_ref=context.bundle_root,
             project_key=context.project_key,
             sealed_key_ref=sealed_key,
             nonce=os.urandom(20),
+            bundle_sha256=hash_bundle_root(Path(context.bundle_root)),
             policy=policy,
             launcher=launcher,
             verifier=verifier,

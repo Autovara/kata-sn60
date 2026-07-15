@@ -161,6 +161,21 @@ def test_validate_sn60_static_screening_allows_helper_files_but_rejects_leak_tok
     assert any("benchmark-answer leakage token" in reason for reason in reasons)
 
 
+def test_tee_allows_an_inference_free_bundle_but_validates_supplied_ciphertext(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("KATA_SN60_USE_TEE_ROOM", "1")
+    bundle_root = tmp_path / "candidate"
+    write_bundle(bundle_root, VALID_AGENT_SOURCE)
+
+    reasons = validate_sn60_static_screening(bundle_root)
+    assert not any("sealed_inference_key" in reason for reason in reasons)
+
+    (bundle_root / "sealed_inference_key").write_text("not-hex", encoding="utf-8")
+    reasons = validate_sn60_static_screening(bundle_root)
+    assert any("sealed_inference_key must be" in reason for reason in reasons)
+
+
 def test_screen_submission_wraps_current_static_screening(tmp_path: Path) -> None:
     bundle_root = tmp_path / "candidate"
     write_bundle(

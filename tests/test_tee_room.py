@@ -36,11 +36,23 @@ POLICY = RoomPolicy(approved_measurements=frozenset({APPROVED}))
 NONCE = bytes.fromhex("0123456789abcdef0123456789abcdef")
 PROJECT = "demo-project"
 REPORT = {"vulnerabilities": [{"id": "F1"}]}
+BUNDLE_SHA256 = "ab" * 32
+PROVENANCE = {
+    "profile": "sn60-bitsec-v1",
+    "project_image": "ghcr.io/bitsec-ai/demo@sha256:" + "cd" * 32,
+    "pinned_model": "qwen-test",
+    "job_id": NONCE.hex(),
+}
 
 
-def _commitment(report, nonce, project):
-    ah = hashlib.sha256(canonical(report)).digest()
-    return hashlib.sha256(nonce + project.encode() + ah).digest()
+def _commitment(report, nonce, project, bundle_sha256=BUNDLE_SHA256, provenance=PROVENANCE):
+    binding = {
+        "report": report,
+        "bundle_sha256": bundle_sha256,
+        "provenance": provenance,
+    }
+    binding_hash = hashlib.sha256(canonical(binding)).digest()
+    return hashlib.sha256(nonce + project.encode() + binding_hash).digest()
 
 
 class _Verifier:
@@ -59,13 +71,22 @@ class _Launcher:
     def launch_and_run(self, **kw):
         if self._boom:
             raise RuntimeError("CVM failed")
-        return RoomResult(report=self._report, quote_hex="q")
+        return RoomResult(
+            report=self._report,
+            quote_hex="q",
+            bundle_sha256=BUNDLE_SHA256,
+            provenance=PROVENANCE,
+        )
 
 
 def _eval(**over):
     kw = dict(
         candidate_id="pr-1", agent_ref="b", project_key=PROJECT, sealed_key_ref="blob",
-        nonce=NONCE, policy=POLICY, launcher=_Launcher(), verifier=_Verifier(),
+        nonce=NONCE,
+        bundle_sha256=BUNDLE_SHA256,
+        policy=POLICY,
+        launcher=_Launcher(),
+        verifier=_Verifier(),
         seen_nonces=set(),
     )
     kw.update(over)
@@ -106,8 +127,10 @@ def test_verify_binds_answer():
         def verify(self, q):
             return good
 
-    r = verify_room_run(quote_hex="q", report=REPORT, nonce=NONCE, project_key=PROJECT,
-                        policy=POLICY, verifier=V())
+    r = verify_room_run(
+        quote_hex="q", report=REPORT, nonce=NONCE, project_key=PROJECT,
+        bundle_sha256=BUNDLE_SHA256, provenance=PROVENANCE, policy=POLICY, verifier=V(),
+    )
     assert r.accepted
 
 

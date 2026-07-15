@@ -3,7 +3,7 @@
 # The base (kata-tee-runner) provides room/ (sealing, relay, attestation, the server) and pulls the
 # problem image; this layer only adds SN60's execution profile + its stub agents and names it via
 # KATA_TEE_PROFILE. Build with ./build.sh (it vendors relay.py from the SN60 relay source).
-ARG BASE=kata-tee-runner:latest
+ARG BASE
 FROM ${BASE}
 WORKDIR /app
 # SN60-specific execution: the profile (pull ghcr.io/bitsec-ai/<key>, run the agent, collect
