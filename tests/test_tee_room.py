@@ -5,6 +5,10 @@ Uses fake launcher/verifier so the whole flow is testable without a real TEE.
 
 import hashlib
 import hmac
+import tarfile
+from base64 import b64decode
+from io import BytesIO
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +17,7 @@ from kata_sn60.execution.tee_room import (
     RoomPolicy,
     RoomResult,
     VerifiedQuote,
+    _bundle_tar_b64,
     canonical,
     evaluate_candidate_in_room,
     room_signature,
@@ -31,6 +36,28 @@ def test_room_signature_requires_the_shared_secret(monkeypatch):
     monkeypatch.delenv(ROOM_AUTH_SECRET_ENV, raising=False)
     with pytest.raises(RuntimeError, match=ROOM_AUTH_SECRET_ENV):
         room_signature(b"x")
+
+
+def test_bundle_transfer_excludes_transient_local_files(tmp_path: Path) -> None:
+    bundle = tmp_path / "submission"
+    bundle.mkdir()
+    (bundle / "agent.py").write_text("def agent_main(): pass\n", encoding="utf-8")
+    cache = bundle / "__pycache__"
+    cache.mkdir()
+    (cache / "agent.cpython-313.pyc").write_bytes(b"compiled-agent")
+    (bundle / "helper.pyo").write_bytes(b"optimized-agent")
+    git_dir = bundle / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+    archive = b64decode(_bundle_tar_b64(str(bundle)))
+    with tarfile.open(fileobj=BytesIO(archive), mode="r:gz") as tar:
+        names = tar.getnames()
+
+    assert any(name.endswith("agent.py") for name in names)
+    assert not any("__pycache__" in name for name in names)
+    assert not any(name.endswith((".pyc", ".pyo")) for name in names)
+    assert not any(name == ".git" or name.startswith(".git/") for name in names)
 
 
 APPROVED = "approved-runner-image"

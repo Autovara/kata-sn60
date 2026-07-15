@@ -269,7 +269,7 @@ def _bundle_tar_b64(bundle_root: str) -> str:
 
     def _keep(ti: "tarfile.TarInfo"):
         n = ti.name
-        if "__pycache__" in n or n.endswith(".pyc") or "/.git" in n or n == "./.git":
+        if "__pycache__" in n or n.endswith((".pyc", ".pyo")) or "/.git" in n or n == "./.git":
             return None
         return ti
 

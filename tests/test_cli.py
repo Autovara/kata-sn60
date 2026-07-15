@@ -7,6 +7,57 @@ from pathlib import Path
 import pytest
 from kata.cli import build_parser, main, parse_round_candidate
 
+from kata_sn60.cli import sn60_round_result_json
+
+
+def test_sn60_round_result_json_preserves_projects_and_execution_screening() -> None:
+    variant = types.SimpleNamespace(
+        aggregated_score=0.0,
+        average_detection_rate=0.0,
+        true_positives=0,
+        total_expected=0,
+        total_found=0,
+        precision=0.0,
+        f1_score=0.0,
+        invalid_runs=1,
+        codebase_pass_count=0,
+        project_summaries=[],
+    )
+    screening = {
+        "status": "failed",
+        "stage": "execution",
+        "project_key": "project-alpha",
+    }
+    result = types.SimpleNamespace(
+        run_id="sn60-round-test",
+        output_root="/tmp/run",
+        winner_submission_id=None,
+        winner_challenge_summary_path=None,
+        promotion_ready=False,
+        promotion_reason="no candidate beat the king",
+        competition_mode="king_duel",
+        king_skipped_reason=None,
+        replicas_per_project=1,
+        project_keys=["project-alpha"],
+        king=None,
+        entries=[
+            types.SimpleNamespace(
+                submission_id="pr-144",
+                beats_king=False,
+                selected_winner=False,
+                duel_run_id="sn60-screening-test",
+                screening_result=screening,
+                candidate=variant,
+            )
+        ],
+    )
+
+    payload = sn60_round_result_json(result)
+
+    assert payload["project_keys"] == ["project-alpha"]
+    assert payload["replicas_per_project"] == 1
+    assert payload["entries"][0]["screening_result"] == screening
+
 
 def test_top_level_cli_exposes_agent_competition_commands() -> None:
     parser = build_parser()

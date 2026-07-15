@@ -55,6 +55,8 @@ def sn60_round_result_json(result) -> dict:
         "competition_mode": result.competition_mode,
         "king_skipped_reason": result.king_skipped_reason,
         "validator_replica_count": 1,
+        "project_keys": list(getattr(result, "project_keys", [])),
+        "replicas_per_project": result.replicas_per_project,
         "runs_per_project": runs_per_project,
         "project_pass_threshold": project_pass_threshold_label(runs_per_project),
         "king": sn60_variant_detail(result.king) if result.king else None,
@@ -64,6 +66,7 @@ def sn60_round_result_json(result) -> dict:
                 "beats_king": entry.beats_king,
                 "selected_winner": entry.selected_winner,
                 "duel_run_id": entry.duel_run_id,
+                "screening_result": getattr(entry, "screening_result", None),
                 **sn60_variant_detail(entry.candidate),
             }
             for entry in result.entries
