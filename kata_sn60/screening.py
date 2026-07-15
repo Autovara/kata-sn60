@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from kata.screening_system.models import ScreeningFinding
+from kata.screening.models import ScreeningFinding
 
 from kata_sn60.benchmark_replay import (
     analyze_benchmark_replay,

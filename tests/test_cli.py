@@ -5,7 +5,7 @@ import types
 from pathlib import Path
 
 import pytest
-from kata.interfaces.cli import build_parser, main, parse_round_candidate
+from kata.cli import build_parser, main, parse_round_candidate
 
 
 def test_top_level_cli_exposes_agent_competition_commands() -> None:

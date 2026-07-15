@@ -11,7 +11,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from kata.screening_system.models import ScreeningDecision, ScreeningFinding
+from kata.screening.models import ScreeningDecision, ScreeningFinding
 
 LLM_REVIEW_ENV = "KATA_SCREENING_LLM_REVIEW"
 LLM_MODEL_ENV = "KATA_SCREENING_LLM_MODEL"

@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from kata.packages import (
+from kata.plugins import (
     EnvSpec,
     ScoreCard,
     ScoringProfile,
@@ -19,8 +19,8 @@ from kata.packages import (
     clear_registry,
     register_plugin,
 )
-from kata.packages.dispatch import load_builtin_plugins
-from kata.screening_system.engine import _plugin_static_screen_findings
+from kata.plugins.discovery import load_builtin_plugins
+from kata.screening.engine import _plugin_static_screen_findings
 
 
 class _ScreeningPlugin(SubnetPlugin):

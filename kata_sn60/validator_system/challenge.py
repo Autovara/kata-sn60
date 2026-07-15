@@ -9,7 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from kata.provenance import short_hash
-from kata.state_system.lane import (
+from kata.state.lanes import (
     BENCHMARK_SNAPSHOT_SCHEMA_VERSION,
     CHALLENGE_STATE_SCHEMA_VERSION,
     PROMOTION_RECORD_SCHEMA_VERSION,
@@ -20,7 +20,7 @@ from kata.state_system.lane import (
     write_challenge_state,
     write_promotion_record,
 )
-from kata.state_system.live_progress import update_live_status
+from kata.state.progress import update_live_status
 
 from kata_sn60.sn60_bitsec import (
     DEFAULT_EVAL_MAX_VULNS,

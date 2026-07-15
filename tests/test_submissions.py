@@ -5,8 +5,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from kata.screening_system.rules import hash_submission_bundle
-from kata.state_system.lane import (
+from kata.screening.rules import hash_submission_bundle
+from kata.state.lanes import (
     KING_STATE_SCHEMA_VERSION,
     LANE_METADATA_SCHEMA_VERSION,
     EvaluatorLaneMetadata,
@@ -19,11 +19,14 @@ from kata.state_system.lane import (
     write_lane_king_state,
     write_lane_metadata,
 )
-from kata.submission_system import (
+from kata.submissions.bundle import AGENT_MANIFEST_FILENAME, write_agent_manifest
+from kata.submissions.constants import (
     PR_ACTION_CLOSE_INVALID,
     PR_ACTION_EVALUATE,
     PR_ACTION_MERGE,
     PR_ACTION_RERUN_STALE,
+)
+from kata.submissions.workflow import (
     decide_submission_action,
     init_submission,
     inspect_pull_request,
@@ -31,7 +34,6 @@ from kata.submission_system import (
     validate_submission,
     verify_submission_result,
 )
-from kata.submission_system.bundle import AGENT_MANIFEST_FILENAME, write_agent_manifest
 
 from kata_sn60.evaluate import evaluate_submission
 from kata_sn60.validator_system import run_sn60_challenge, sample_sn60_project_keys

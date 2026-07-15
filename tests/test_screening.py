@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kata.screening_system import screen_submission
-from kata.screening_system.models import ScreeningFinding
-from kata.screening_system.rules import (
+from kata.screening import screen_submission
+from kata.screening.models import ScreeningFinding
+from kata.screening.rules import (
     MAX_SUBMISSION_BUNDLE_BYTES,
     MAX_SUBMISSION_FILE_BYTES,
     screen_submission_bundle_files,

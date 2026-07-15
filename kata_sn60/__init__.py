@@ -6,7 +6,7 @@ reference plugin -- the first tenant of the multi-subnet platform.
 
 from __future__ import annotations
 
-from kata.packages.registry import register_plugin
+from kata.plugins.registry import register_plugin
 
 from .plugin import Sn60BitsecPlugin, Sn60Problems, Sn60RawRun
 from .round import build_sn60_round_result, run_sn60_plugin_round

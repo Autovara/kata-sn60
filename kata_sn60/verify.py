@@ -8,7 +8,7 @@ Relocates to ``kata-sn60`` in Phase 3.
 from __future__ import annotations
 
 from kata.provenance import short_hash
-from kata.state_system.lane import benchmark_snapshot_path, load_benchmark_snapshot
+from kata.state.lanes import benchmark_snapshot_path, load_benchmark_snapshot
 
 from kata_sn60.promotion import load_sn60_duel_summary
 

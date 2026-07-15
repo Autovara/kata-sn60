@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from kata.packages.plugin import (
+from kata.plugins.contract import (
     EnvSpec,
     ProgressUpdate,
     RunContext,
@@ -247,7 +247,7 @@ class Sn60BitsecPlugin(SubnetPlugin):
         Loads the bundle and runs SN60's static rules. Lazy imports avoid a screening
         module-load cycle. Returns findings, or None when the bundle is clean.
         """
-        from kata.submission_system.bundle import load_bundle_files
+        from kata.submissions.bundle import load_bundle_files
 
         from kata_sn60.static_screening import screen_sn60_static_bundle
 

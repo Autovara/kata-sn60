@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from kata.packages import (
+from kata.plugins import (
     EnvSpec,
     ProgressUpdate,
     RunContext,

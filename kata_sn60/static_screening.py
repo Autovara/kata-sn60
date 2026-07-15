@@ -15,13 +15,13 @@ from kata.ast_utils import (
     find_module_function_def,
     function_supports_no_arg_invocation,
 )
-from kata.screening_system.models import ScreeningFinding, dedupe_findings
-from kata.screening_system.python_ast import (
+from kata.screening.models import ScreeningFinding, dedupe_findings
+from kata.screening.python_ast import (
     agent_main_returns_direct_constant_report,
     agent_main_returns_direct_empty_report,
 )
-from kata.screening_system.rules import SECRET_PATTERN, finding_reasons, reject_finding
-from kata.submission_system.bundle import AGENT_ENTRY_FILENAME, SEALED_KEY_FILENAME
+from kata.screening.rules import SECRET_PATTERN, finding_reasons, reject_finding
+from kata.submissions.bundle import AGENT_ENTRY_FILENAME, SEALED_KEY_FILENAME
 
 BENCHMARK_LEAK_TOKENS = (
     "curated-highs-only",
@@ -188,7 +188,7 @@ def _tee_execution_enabled() -> bool:
 
 
 def validate_sn60_static_screening(candidate_root: str | Path) -> list[str]:
-    from kata.submission_system.bundle import load_bundle_files
+    from kata.submissions.bundle import load_bundle_files
 
     root = Path(candidate_root).expanduser().resolve()
     return finding_reasons(screen_sn60_static_bundle(load_bundle_files(root)))

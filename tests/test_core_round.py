@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 
 from kata.core.round import run_plugin_round
-from kata.packages.plugin import EnvSpec, ScoreCard, ScoringProfile, SubnetPlugin
+from kata.plugins.contract import EnvSpec, ScoreCard, ScoringProfile, SubnetPlugin
 
 from kata_sn60 import Sn60BitsecPlugin
 from kata_sn60.validator_system import run_sn60_round

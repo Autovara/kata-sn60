@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kata.screening_system.models import ScreeningDecision, ScreeningFinding
+from kata.screening.models import ScreeningDecision, ScreeningFinding
 
 from kata_sn60.llm_review import (
     LlmCommandResult,

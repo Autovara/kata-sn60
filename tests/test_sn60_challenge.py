@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from kata.state_system.lane import (
+from kata.state.lanes import (
     load_benchmark_snapshot,
     load_challenge_state,
     load_promotion_record,

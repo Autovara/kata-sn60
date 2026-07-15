@@ -17,7 +17,7 @@ from typing import Callable, NamedTuple, TypedDict
 from urllib.parse import urlparse
 
 from kata.provenance import sha256_directory
-from kata.submission_system.bundle import (
+from kata.submissions.bundle import (
     AGENT_ENTRY_FILENAME,
     load_bundle_files,
     write_bundle_files,

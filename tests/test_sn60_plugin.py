@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kata.packages import RunContext, ScoringProfile, get_plugin
+from kata.plugins import RunContext, ScoringProfile, get_plugin
 
 from kata_sn60 import SN60_BITSEC_PLUGIN, Sn60BitsecPlugin
 

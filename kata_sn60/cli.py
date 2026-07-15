@@ -178,7 +178,7 @@ def register_sn60_cli(subparsers) -> None:
 
 
 def handle_sn60_baseline(args) -> int:
-    from kata.interfaces.cli import parse_round_candidate, print_json
+    from kata.cli import parse_round_candidate, print_json
 
     submission_id, artifact_path = parse_round_candidate(args.candidate)
     result = run_sn60_baseline_only(
@@ -272,7 +272,7 @@ def sn60_add_evaluate_arguments(parser) -> None:
 
 
 def sn60_evaluate_from_cli(args) -> int:
-    from kata.interfaces.cli import print_json
+    from kata.cli import print_json
 
     from kata_sn60.evaluate import evaluate_submission
     from kata_sn60.validator_system import render_challenge_summary

@@ -10,7 +10,7 @@ unchanged.
 from __future__ import annotations
 
 from kata.core.round import RoundOutcome
-from kata.packages.plugin import ProgressUpdate
+from kata.plugins.contract import ProgressUpdate
 
 from kata_sn60.validator_system.challenge import (
     DEFAULT_SN60_ROUND_SCHEMA_VERSION,

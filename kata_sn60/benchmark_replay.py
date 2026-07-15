@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-from kata.screening_system.models import ScreeningFinding, dedupe_findings
+from kata.screening.models import ScreeningFinding, dedupe_findings
 
 SN60_SANDBOX_ROOT_ENV = "KATA_SN60_SANDBOX_ROOT"
 SN60_BENCHMARK_FILE_ENV = "KATA_SN60_BENCHMARK_FILE"

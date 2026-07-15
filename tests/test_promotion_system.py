@@ -4,14 +4,14 @@ import json
 import types
 from pathlib import Path
 
-from kata.promotion_system import (
+from kata.promotion import (
     find_evaluator_pack_entry,
     promote_lane_king,
     resolve_lane_king_hash,
     validate_submission_lane,
 )
-from kata.screening_system.rules import hash_submission_bundle
-from kata.state_system.lane import (
+from kata.screening.rules import hash_submission_bundle
+from kata.state.lanes import (
     LANE_METADATA_SCHEMA_VERSION,
     EvaluatorLaneMetadata,
     load_challenge_state,
@@ -19,7 +19,7 @@ from kata.state_system.lane import (
     load_promotion_record,
     write_lane_metadata,
 )
-from kata.submission_system.bundle import AGENT_MANIFEST_FILENAME, write_agent_manifest
+from kata.submissions.bundle import AGENT_MANIFEST_FILENAME, write_agent_manifest
 
 from kata_sn60.sn60_bitsec import hash_bundle_root
 
