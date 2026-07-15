@@ -1,4 +1,0 @@
-This file is a PLACEHOLDER. Replace it with a real file named exactly:
-    sealed_inference_key
-produced by:
-    python3 kata_seal.py --room https://<ROOM-URL> --key akml-your-key --measurement <COMPOSE-HASH>
