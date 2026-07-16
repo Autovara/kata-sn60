@@ -25,13 +25,14 @@ uv run kata submission init \
   --author alice
 ```
 
-`alice` must be your GitHub username, and the submission id must be `<github-username>-YYYYMMDD-NN`. This creates:
+`alice` must be your GitHub username, and the submission id must be `<github-username>-YYYYMMDD-NN`. This creates three files; step 3 adds a fourth, so the bundle you finally commit to the PR has **four**:
 
 ```text
 submissions/sn60__bitsec/miner/alice-20260716-01/
-  agent.py            # your code
-  agent_manifest.json # runtime contract (leave as generated)
-  submission.json     # metadata (leave as generated)
+  agent.py             # your code
+  agent_manifest.json  # runtime contract (leave as generated)
+  submission.json      # metadata (leave as generated)
+  sealed_inference_key # your encrypted provider key — added in step 3
 ```
 
 ### 2. Write `agent.py`
@@ -104,28 +105,53 @@ uv run kata submission validate \
 
 Commit only your submission directory (including `sealed_inference_key`), push a branch, and open one PR against the default branch. kata-bot screens it and labels it `kata:pending`; the next round scores it.
 
-## Screening — what gets rejected or held
+## Agent and bundle limits
 
-Screening runs on your source before any scoring, so cheap cheating is caught without spending inference. Your PR is **rejected** for:
+- One submission directory per PR, and one open PR per contributor at a time.
+- The PR may touch only that one directory.
+- Required files: `agent.py`, `agent_manifest.json`, `submission.json`, plus `sealed_inference_key` once you seal.
+- Extra Python helpers are allowed, but only under a `helpers/` subdirectory.
+- Bundle size: at most **16 files**, **128 KiB per file**, and **256 KiB total**. No symlinks.
+- `agent.py` must define a **synchronous** `agent_main` that is callable with **no arguments** and returns `{"vulnerabilities": [...]}`.
+- Your identity must match: the `<github-username>` in the submission id and the `author` in `submission.json` must both equal the GitHub account that opens the PR.
 
-- A no-op agent whose `agent_main` returns an empty `{"vulnerabilities": []}` without analyzing anything.
-- A constant, canned report that does not read the project.
-- Hardcoded secrets, or references to validator-only secrets (`CHUTES_API_KEY`, `KATA_VALIDATOR_API_KEY`).
-- Benchmark answer-key leakage (tokens like `answer_key`, `ground_truth`, `expected_findings`, `scabench`) — do not embed known answers.
-- An `agent_main` that is missing, `async`, or cannot be called with no arguments.
-- A `sealed_inference_key` that is not valid ciphertext (must decode to at least 32 bytes).
+## Screening
 
-It is **held for review** (`kata:review`, a maintainer looks before the round) for a near-copy of the current king, or ambiguous benchmark-replay logic. General, reusable analysis is fine; replaying answers for specific known projects is not.
+Before a round spends any inference, kata-bot screens your source. There are three outcomes.
 
-## How you win
+**Rejected and closed** (`kata:invalid`) — a hard failure:
 
-A round samples one or more benchmark projects (each has a known set of high/critical vulnerabilities). The current king and every candidate are scored on the **same** projects.
+- No-op agent — `agent_main` returns an empty `{"vulnerabilities": []}` without analyzing anything.
+- A constant, canned report that never reads the project.
+- Hardcoded secrets, or any reference to validator-only secrets (`CHUTES_API_KEY`, `KATA_VALIDATOR_API_KEY`).
+- Benchmark answer-key leakage — tokens such as `answer_key`, `ground_truth`, `expected_findings`, or `scabench`. Do not embed known answers.
+- `agent_main` missing, `async`, or not callable with no arguments; or a Python syntax error.
+- A `sealed_inference_key` that is not valid ciphertext (it must decode to at least 32 bytes).
+- Wrong identity, a bundle outside the limits above, or an exact/AST-equivalent copy of the current king.
 
-- Each project runs a few times (replicas) and passes on a **two-thirds majority** (with 3 replicas, 2 of 3 must pass). Running it a few times smooths out model noise.
-- Candidates are ranked by: **projects passed**, then true positives, then fewer failed runs, then precision, then F1.
-- You win only by **strictly beating** the king on that order. A tie keeps the king.
+**Held for review** (`kata:review`) — a maintainer checks it before the round runs:
 
-The king is re-scored fresh every round (SN60 scores come from LLM-driven detection plus an LLM judge, so they drift run to run — nothing is cached across rounds).
+- A near-copy of the current king (highly similar, but not an exact copy).
+- Ambiguous benchmark-replay logic.
+
+**Passes** — everything else. General, reusable analysis is fine. An honest agent that happens to find nothing on a project simply scores 0 there; it is not rejected for that.
+
+## How you win (scoring)
+
+A round samples one or more benchmark projects — each is a real codebase with a known set of high/critical vulnerabilities. The king and every candidate are scored on the **same** projects, so results are directly comparable.
+
+- **Replicas.** Each project runs a few times (production uses 3). A project counts as *passed* on a **two-thirds majority** — with 3 runs, 2 must pass. Repeating smooths out model noise.
+- **Per project the scorer reports:** true positives (real bugs you found), total expected, precision, F1, and pass/fail. A run that errors out counts as a *failed run* and contributes nothing.
+- **Ranking order** — compared top to bottom; the first difference decides:
+  1. projects passed
+  2. true positives
+  3. fewer failed runs
+  4. precision
+  5. F1
+- **You must strictly beat the king** on that order to be promoted. An exact tie keeps the king.
+- **The king is re-scored fresh every round.** SN60 scores come from LLM-driven detection plus an LLM judge, so they drift run to run — nothing is cached across rounds, and a candidate always faces a freshly-scored king on the same projects.
+
+In short: find more real high/critical bugs, more reliably, with fewer false positives.
 
 ## How your agent runs
 
