@@ -90,7 +90,10 @@ def test_sn60_plugin_registers_on_import() -> None:
     assert get_plugin("sn60_bitsec") is SN60_BITSEC_PLUGIN
 
 
-def test_sn60_plugin_identity_and_env() -> None:
+def test_sn60_plugin_identity_and_env(monkeypatch) -> None:
+    # Assert the code's production default (TEE); the suite autouse fixture sets
+    # the sandbox backend, so clear it to observe the real default here.
+    monkeypatch.delenv("KATA_SN60_EXECUTION_BACKEND", raising=False)
     plugin = Sn60BitsecPlugin()
     assert plugin.evaluator_id == "sn60_bitsec"
     assert plugin.pack == "sn60__bitsec"

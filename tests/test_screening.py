@@ -158,19 +158,59 @@ def test_validate_sn60_static_screening_allows_helper_files_but_rejects_leak_tok
     assert any("benchmark-answer leakage token" in reason for reason in reasons)
 
 
-def test_tee_allows_an_inference_free_bundle_but_validates_supplied_ciphertext(
+def test_tee_requires_a_sealed_inference_key(tmp_path: Path, monkeypatch) -> None:
+    # Backend unset defaults to the attested TEE, which is miner-paid.
+    monkeypatch.delenv("KATA_SN60_EXECUTION_BACKEND", raising=False)
+    bundle_root = tmp_path / "candidate"
+    write_bundle(bundle_root, VALID_AGENT_SOURCE)
+
+    # No sealed_inference_key -> rejected at static screening (was previously allowed).
+    reasons = validate_sn60_static_screening(bundle_root)
+    assert any("must include a sealed_inference_key" in reason for reason in reasons)
+
+    # A supplied-but-malformed key is still rejected as invalid ciphertext.
+    (bundle_root / "sealed_inference_key").write_text("not-hex", encoding="utf-8")
+    reasons = validate_sn60_static_screening(bundle_root)
+    assert any("sealed_inference_key must be" in reason for reason in reasons)
+
+    # A valid non-trivial ciphertext (>= 32 bytes of hex) passes the sealed-key gate.
+    (bundle_root / "sealed_inference_key").write_text("ab" * 48, encoding="utf-8")
+    reasons = validate_sn60_static_screening(bundle_root)
+    assert not any("sealed_inference_key" in reason for reason in reasons)
+
+
+def test_sandbox_backend_does_not_require_a_sealed_inference_key(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.delenv("KATA_SN60_EXECUTION_BACKEND", raising=False)
+    # The explicit local dev backend needs no sealed key.
+    monkeypatch.setenv("KATA_SN60_EXECUTION_BACKEND", "sandbox")
     bundle_root = tmp_path / "candidate"
     write_bundle(bundle_root, VALID_AGENT_SOURCE)
 
     reasons = validate_sn60_static_screening(bundle_root)
     assert not any("sealed_inference_key" in reason for reason in reasons)
 
-    (bundle_root / "sealed_inference_key").write_text("not-hex", encoding="utf-8")
-    reasons = validate_sn60_static_screening(bundle_root)
-    assert any("sealed_inference_key must be" in reason for reason in reasons)
+
+def test_screen_submission_rejects_keyless_bundle_under_tee(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Full engine path (core + plugin static screening) must reject a submission
+    # with no sealed_inference_key when the TEE backend is active.
+    monkeypatch.delenv("KATA_SN60_EXECUTION_BACKEND", raising=False)
+    bundle_root = tmp_path / "candidate"
+    write_bundle(bundle_root, VALID_AGENT_SOURCE)
+
+    decision = screen_submission(
+        submission_root=bundle_root,
+        public_root=None,
+        mode="miner",
+        repo_pack="sn60__bitsec",
+    )
+
+    assert decision.status == "reject"
+    assert "sn60.tee_sealed_key_missing" in {
+        finding.rule_id for finding in decision.reject_reasons
+    }
 
 
 def test_screen_submission_wraps_current_static_screening(tmp_path: Path) -> None:

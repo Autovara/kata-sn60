@@ -69,13 +69,27 @@ def screen_sn60_static_bundle(bundle_files: dict[str, str]) -> list[ScreeningFin
                 )
             )
 
-    # TEE rounds are miner-paid. A bundle may intentionally be inference-free (the maintained
-    # zero-cost baseline is one example), but when a miner supplies a key it must be ciphertext for
-    # the room. The runner has no platform-key fallback, so an omitted key can never spend operator
-    # funds; inference attempts without one simply receive no usable upstream credential.
+    # TEE rounds are miner-paid: the agent runs inside the attested room and pays for
+    # its own inference with the miner's sealed provider key. A submission with no
+    # sealed_inference_key has no inference credential, so it can never produce real
+    # findings -- it would only burn one real room job to score 0. Reject it here at
+    # static screening (source-only, no inference) instead of admitting it to a round.
+    # When a key IS supplied it must be non-trivial ciphertext for the room.
     if _tee_execution_enabled():
         sealed_key = str(bundle_files.get(SEALED_KEY_FILENAME) or "").strip()
-        if sealed_key:
+        if not sealed_key:
+            findings.append(
+                reject_finding(
+                    "sn60.tee_sealed_key_missing",
+                    "SN60 runs your agent inside an attested TEE where it pays for its own "
+                    "model calls, so every submission must include a sealed_inference_key. "
+                    "This bundle has none, so the agent has no inference credential and "
+                    "cannot be scored. Seal your provider key and commit the "
+                    "sealed_inference_key file.",
+                    path=SEALED_KEY_FILENAME,
+                )
+            )
+        else:
             try:
                 encrypted = bytes.fromhex(sealed_key)
             except ValueError:
