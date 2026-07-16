@@ -23,7 +23,11 @@ from room.inference_network import (
     inference_gateway_url,
     start_inference_gateway_once,
 )
-from room.profile import MinerInferenceCredential, TeeJobResult
+from room.profile import (
+    MinerInferenceCredential,
+    TeeJobResult,
+    resolve_agent_execution_timeout_seconds,
+)
 
 FIXTURE_AGENT = "/app/fixture_agent.py"
 
@@ -176,7 +180,13 @@ class Sn60TeeProfile:
                 cp_in = docker(["cp", cp_src, f"{container}:{cp_dst}"])
                 if cp_in.returncode != 0:
                     raise RuntimeError(f"cp agent in failed: {cp_in.stderr[:400]}")
-                start = docker(["start", "-a", container], timeout=600)  # -a waits for exit
+                # The generic room setting is a total process safety limit, not
+                # a model/token/call/retry policy. It leaves the agent free to
+                # use its own miner-funded provider strategy within the job.
+                start = docker(
+                    ["start", "-a", container],
+                    timeout=resolve_agent_execution_timeout_seconds(),
+                )  # -a waits for exit
                 cp_out = docker(
                     ["cp", f"{container}:/app/report.json", str(workdir / "report.json")]
                 )

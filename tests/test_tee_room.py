@@ -13,17 +13,39 @@ from pathlib import Path
 import pytest
 
 from kata_sn60.execution.tee_room import (
+    DEFAULT_ROOM_HTTP_TIMEOUT_SECONDS,
     ROOM_AUTH_SECRET_ENV,
+    ROOM_HTTP_TIMEOUT_ENV,
+    HttpRoomLauncher,
     RoomPolicy,
     RoomResult,
     VerifiedQuote,
     _bundle_tar_b64,
     canonical,
     evaluate_candidate_in_room,
+    resolve_room_http_timeout_seconds,
     room_signature,
     verify_room_run,
 )
 from kata_sn60.sn60_bitsec import stage_bundle
+
+
+def test_room_http_timeout_uses_the_production_default(monkeypatch) -> None:
+    monkeypatch.delenv(ROOM_HTTP_TIMEOUT_ENV, raising=False)
+    assert resolve_room_http_timeout_seconds() == DEFAULT_ROOM_HTTP_TIMEOUT_SECONDS
+    assert HttpRoomLauncher("https://room.example").timeout == DEFAULT_ROOM_HTTP_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "not-a-number"])
+def test_room_http_timeout_rejects_invalid_configuration(monkeypatch, value) -> None:
+    monkeypatch.setenv(ROOM_HTTP_TIMEOUT_ENV, value)
+    with pytest.raises(RuntimeError, match=ROOM_HTTP_TIMEOUT_ENV):
+        resolve_room_http_timeout_seconds()
+
+
+def test_room_http_timeout_accepts_a_positive_override(monkeypatch) -> None:
+    monkeypatch.setenv(ROOM_HTTP_TIMEOUT_ENV, "905")
+    assert HttpRoomLauncher("https://room.example").timeout == 905.0
 
 
 def test_room_signature_matches_the_rooms_hmac(monkeypatch):

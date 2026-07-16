@@ -14,7 +14,9 @@ services:
       - KATA_ROOM_AUTH_SECRET=${KATA_ROOM_AUTH_SECRET}
       # Keep diagnostics off in production. /pull-test is otherwise a signed POST-only endpoint.
       - KATA_ROOM_ENABLE_DIAGNOSTICS=false
-      - KATA_ROOM_MAX_REQUEST_LIFETIME_SECONDS=1200
+      # Signed /run requests are valid for at most 900 seconds. This bounds
+      # replay validity; the profile separately caps the agent process below.
+      - KATA_ROOM_MAX_REQUEST_LIFETIME_SECONDS=900
       - KATA_ROOM_MAX_REQUEST_BYTES=1048576
       - KATA_ROOM_MAX_COMPRESSED_BUNDLE_BYTES=524288
       - KATA_ROOM_MAX_EXTRACTED_BUNDLE_BYTES=262144
@@ -31,7 +33,10 @@ services:
       # selects one id from this registry; the miner never supplies an arbitrary endpoint or plaintext
       # key. The gateway does not set a model, sampling policy, token/call budget, or retry budget.
       - KATA_INFERENCE_GATEWAY_PROVIDER_ROUTES_JSON=${KATA_INFERENCE_GATEWAY_PROVIDER_ROUTES_JSON}
-      - KATA_INFERENCE_GATEWAY_TIMEOUT=${KATA_INFERENCE_GATEWAY_TIMEOUT}
+      # One miner-funded upstream call is bounded independently from the whole
+      # agent process. These defaults form 180s < 840s < 900s.
+      - KATA_INFERENCE_GATEWAY_TIMEOUT=${KATA_INFERENCE_GATEWAY_TIMEOUT:-180}
+      - KATA_TEE_AGENT_EXECUTION_TIMEOUT_SECONDS=${KATA_TEE_AGENT_EXECUTION_TIMEOUT_SECONDS:-840}
     volumes:
       # dstack guest-agent socket -- lets the app call get_quote.
       - /var/run/dstack.sock:/var/run/dstack.sock

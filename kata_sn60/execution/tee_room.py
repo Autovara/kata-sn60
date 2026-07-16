@@ -35,6 +35,8 @@ from typing import Protocol
 # KATA_ROOM_AUTH_SECRET so only this validator can invoke a run.
 ROOM_AUTH_SECRET_ENV = "KATA_ROOM_AUTH_SECRET"
 ROOM_SIGNATURE_HEADER = "X-Kata-Signature"
+ROOM_HTTP_TIMEOUT_ENV = "KATA_SN60_ROOM_HTTP_TIMEOUT_SECONDS"
+DEFAULT_ROOM_HTTP_TIMEOUT_SECONDS = 900.0
 
 
 def room_signature(body: bytes) -> str:
@@ -282,9 +284,9 @@ def _bundle_tar_b64(bundle_root: str) -> str:
 class HttpRoomLauncher:
     """Drive ONE running room over HTTP, per candidate (sealed key travels per request)."""
 
-    def __init__(self, base_url: str, timeout: float = 900.0):
+    def __init__(self, base_url: str, timeout: float | None = None):
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        self.timeout = resolve_room_http_timeout_seconds() if timeout is None else timeout
 
     def launch_and_run(
         self,
@@ -341,3 +343,18 @@ class HttpRoomLauncher:
             bundle_sha256=data["bundle_sha256"],
             provenance=data["provenance"],
         )
+
+
+def resolve_room_http_timeout_seconds() -> float:
+    """Return the validator-side HTTP deadline for one sealed-room request."""
+
+    raw = os.environ.get(ROOM_HTTP_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_ROOM_HTTP_TIMEOUT_SECONDS
+    try:
+        timeout = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{ROOM_HTTP_TIMEOUT_ENV} must be a positive number") from exc
+    if timeout <= 0:
+        raise RuntimeError(f"{ROOM_HTTP_TIMEOUT_ENV} must be a positive number")
+    return timeout

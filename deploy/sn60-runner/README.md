@@ -37,6 +37,25 @@ inference-key fallback.
    `KATA_SN60_ROOM_MEASUREMENTS`, configure the validator with an HTTPS `KATA_SN60_ROOM_URL`, and
    give both sides the same `KATA_ROOM_AUTH_SECRET`.
 
+## Production timing contract
+
+Use these values for one Phala room serving the active SN60 lane:
+
+| Where | Setting | Value | Purpose |
+| --- | --- | ---: | --- |
+| Phala runner | `KATA_INFERENCE_GATEWAY_TIMEOUT` | `180` | Maximum wall-clock time for one upstream provider request. |
+| Miner agent source | HTTP client `timeout` | `195` | Gives the agent a small margin to receive the gateway response. |
+| Phala runner | `KATA_TEE_AGENT_EXECUTION_TIMEOUT_SECONDS` | `840` | Maximum wall-clock time for the complete untrusted agent process. |
+| Kata validator | `KATA_SN60_ROOM_REQUEST_LIFETIME_SECONDS` | `900` | Signed-request validity window. |
+| Kata validator | `KATA_SN60_ROOM_HTTP_TIMEOUT_SECONDS` | `900` | Maximum wait for the room's HTTP response. |
+
+The values intentionally satisfy `180 < 195 < 840 < 900`. They are infrastructure safety limits,
+not a policy on model selection, tokens, number of calls, retries, or miner spending. An agent may
+make any miner-funded calls, but it must complete all of them within its 840-second total process
+budget. The signed-request lifetime is checked when the room accepts the request; it is not an
+execution timer. Keep the problem images warm in the room so image pulling does not consume the
+HTTP response margin.
+
 For miner inference, the miner verifies `/pubkey`'s room attestation, then uses the generic
 `kata_seal.py` tool to encrypt `{provider, api_key, bundle_binding}` to that public key. The binding
 covers the submission files other than the ciphertext itself, so a validator cannot pair public
