@@ -9,6 +9,7 @@ drop-in for the legacy ``run_sn60_round``.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,7 +36,10 @@ from kata_sn60.validator_system.challenge import (
     write_challenge_summary,
     write_sn60_round_summary,
 )
-from kata_sn60.validator_system.screening import screening_result_payload
+from kata_sn60.validator_system.screening import (
+    load_passed_screening_report,
+    screening_result_payload,
+)
 
 from .plugin import Sn60BitsecPlugin, Sn60Problems
 from .progress import Sn60RoundProgress
@@ -280,6 +284,7 @@ def run_sn60_plugin_round(
     qualified: list[tuple[str, str]] = []
     screened_out: list[ScoredVariant] = []
     screening_payloads: dict[str, dict] = {}
+    screened_execution_payloads: dict[str, dict[tuple[str, int], dict[str, object]]] = {}
     screener_run_ids: dict[str, str] = {}
     screened_labels: set[str] = set()
     for label, agent_path in candidates:
@@ -296,6 +301,13 @@ def run_sn60_plugin_round(
         payload = screening_result_payload(screening)
         screening_payloads[label] = payload
         if screening.passed:
+            if screening.project_key in problems.project_keys:
+                # The admission gate has already performed the real sealed execution
+                # for this candidate and sampled project. Count that verified work as
+                # replica 1 instead of spending a duplicate provider request.
+                screened_execution_payloads[label] = {
+                    (screening.project_key, 1): load_passed_screening_report(screening)
+                }
             qualified.append((label, agent_path))
             continue
         candidate_root = Path(agent_path).expanduser().resolve()
@@ -322,6 +334,7 @@ def run_sn60_plugin_round(
     # Lazy king: only score the king when a candidate qualified, so a round where
     # everyone is screened out never runs (or reports) the king.
     score_king_effective = score_king and bool(qualified)
+    scoring_problems = replace(problems, screened_execution_payloads=screened_execution_payloads)
 
     outcome = run_plugin_round(
         plugin,
@@ -332,7 +345,7 @@ def run_sn60_plugin_round(
         seed=run_id,
         score_king=score_king_effective,
         progress=writer.on_update if writer is not None else None,
-        problems=problems,
+        problems=scoring_problems,
     )
 
     if writer is not None:

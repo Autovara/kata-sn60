@@ -47,6 +47,7 @@ from kata_sn60.validator_system.screening import (
     Sn60ScreeningResult,
     build_sn60_execution_note_result,
     build_sn60_screening_id,
+    load_passed_screening_report,
     run_sn60_screening,
     run_sn60_static_screening,
     screening_result_payload,
@@ -213,6 +214,7 @@ def run_sn60_challenge(
         return summary
 
     execution_screening: Sn60ScreeningResult | None = None
+    candidate_reused_execution_payloads: dict[tuple[str, int], dict[str, object]] | None = None
     if sn60_screener_project_enabled():
         screener_project_key = resolve_sn60_screener_project_key(project_keys)
         update_live_status(
@@ -262,6 +264,12 @@ def run_sn60_challenge(
                 public_root=public_root,
             )
             return summary
+        if execution_screening.project_key in project_keys:
+            candidate_reused_execution_payloads = {
+                (execution_screening.project_key, 1): load_passed_screening_report(
+                    execution_screening
+                )
+            }
 
     # The duel runs every sampled project (resilient): bad/empty output is scored 0
     # for that problem and evaluation continues to the next one.
@@ -286,6 +294,7 @@ def run_sn60_challenge(
         sandbox_commit=sandbox_source.sandbox_commit,
         execution_hook=execution_hook,
         evaluation_hook=evaluation_hook,
+        candidate_reused_execution_payloads=candidate_reused_execution_payloads,
     )
     # Task 2 -- execution screening is informational only. It never closes the PR;
     # it records a per-problem findings note (reusing the duel's own reports) so the

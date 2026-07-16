@@ -397,6 +397,7 @@ def test_run_sn60_challenge_optional_screener_project_runs_before_duel(
     assert summary.promotion_ready
     assert execution_order[0] == "screening"
     assert execution_order.count("screening") == 1
+    assert execution_order.count("candidate") == 0
     screening = json.loads(
         Path(summary.manifest_path).with_name("screening_result.json").read_text(encoding="utf-8")
     )
@@ -801,7 +802,14 @@ def _detection_hooks():
             "success": True,
             "report": {
                 "project": context.project_key,
-                "vulnerabilities": [{"title": "v"}],
+                "vulnerabilities": [
+                    {
+                        "title": "Missing authorization",
+                        "description": "A" * 80,
+                        "severity": "high",
+                        "file": "contracts/Vault.sol",
+                    }
+                ],
                 "detection": detection,
             },
         }
@@ -923,12 +931,18 @@ def test_run_sn60_round_optional_screener_skips_failed_candidate(
         if context.variant_name == "screening":
             if detection == 0.0:
                 return {"success": False, "error": "candidate failed smoke run"}
-            return {"success": True, "report": {"vulnerabilities": []}}
         return {
             "success": True,
             "report": {
                 "project": context.project_key,
-                "vulnerabilities": [{"title": "v"}],
+                "vulnerabilities": [
+                    {
+                        "title": "Missing authorization",
+                        "description": "A" * 80,
+                        "severity": "high",
+                        "file": "contracts/Vault.sol",
+                    }
+                ],
                 "detection": detection,
             },
         }
@@ -972,7 +986,8 @@ def test_run_sn60_round_optional_screener_skips_failed_candidate(
     assert by_id["cand-b"].screening_result["status"] == "passed"
     assert by_id["cand-c"].screening_result["status"] == "passed"
     assert ran["screening"] == 3
-    assert ran["candidate"] == 2
+    # Each passing screener result is reused as the only project/replica score.
+    assert ran.get("candidate", 0) == 0
     assert ran["king"] == 1
 
 

@@ -150,7 +150,8 @@ def run_sn60_screening(
 
     ``require_findings=False`` is used for the optional SN60-style screener
     project gate: that gate proves the agent executes and returns valid report
-    JSON, but the real finding score still comes only from the round projects.
+    JSON. When its project is part of the sampled round, the verified report is
+    reused as that project's first scoring replica.
     """
     artifact_root = Path(candidate_artifact_path).expanduser().resolve()
     output_base = Path(output_root).expanduser().resolve()
@@ -227,6 +228,32 @@ def run_sn60_screening(
     )
     write_screening_result(Path(result.result_path), result)
     return result
+
+
+def load_passed_screening_report(result: Sn60ScreeningResult) -> dict[str, object]:
+    """Load a passed execution report for use as the matching scoring replica.
+
+    The runtime screener already performed the expensive sealed execution for the
+    candidate bundle and sampled project. Re-validating its stored report lets the
+    scoring path reuse that work without accepting a corrupted artifact or making
+    another provider request.
+    """
+    if not result.passed or result.stage != SN60_SCREENING_STAGE_EXECUTION:
+        raise ValueError("Only a passed execution screening result can be reused.")
+    if not result.report_path:
+        raise ValueError("Passed execution screening result is missing its report path.")
+    try:
+        payload = json.loads(Path(result.report_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Passed execution screening report could not be read.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Passed execution screening report must be a JSON object.")
+    reasons = validate_sn60_screening_report(payload, require_findings=False)
+    if reasons:
+        raise ValueError(
+            "Passed execution screening report is no longer valid: " + "; ".join(reasons)
+        )
+    return payload
 
 
 def build_default_screening_execution_hook(source: Sn60SandboxSource) -> Sn60ScreeningHook:

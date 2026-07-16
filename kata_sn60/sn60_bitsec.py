@@ -8,11 +8,12 @@ import secrets
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import fmean
-from typing import Callable, NamedTuple, TypedDict
+from typing import Callable, Mapping, NamedTuple, TypedDict
 from urllib.parse import urlparse
 
 from kata.provenance import sha256_directory
@@ -198,6 +199,7 @@ class Sn60DuelSummary:
 
 Sn60ExecutionHook = Callable[[Sn60ReplicaContext], dict[str, object]]
 Sn60EvaluationHook = Callable[[Sn60ReplicaContext, dict[str, object]], dict[str, object]]
+Sn60ReusedExecutionPayloads = Mapping[tuple[str, int], dict[str, object]]
 
 
 def _env_positive_float(name: str, default: float) -> float:
@@ -254,6 +256,7 @@ def run_sn60_bitsec_duel(
     eval_max_vulns: int = DEFAULT_EVAL_MAX_VULNS,
     execution_hook: Sn60ExecutionHook | None = None,
     evaluation_hook: Sn60EvaluationHook | None = None,
+    candidate_reused_execution_payloads: Sn60ReusedExecutionPayloads | None = None,
     king_scoreboard_path: str | None = None,
     progress_callback: Callable[[Sn60ReplicaContext, Sn60ReplicaResult], None] | None = None,
 ) -> Sn60DuelSummary:
@@ -329,6 +332,7 @@ def run_sn60_bitsec_duel(
         sandbox_source=source,
         execution_hook=resolved_execution_hook,
         evaluation_hook=resolved_evaluation_hook,
+        reused_execution_payloads=candidate_reused_execution_payloads,
         eval_max_vulns=eval_max_vulns,
         progress_callback=progress_callback,
     )
@@ -373,6 +377,7 @@ def score_variant_on_projects(
     sandbox_source: Sn60SandboxSource,
     execution_hook: Sn60ExecutionHook,
     evaluation_hook: Sn60EvaluationHook,
+    reused_execution_payloads: Sn60ReusedExecutionPayloads | None = None,
     eval_max_vulns: int = DEFAULT_EVAL_MAX_VULNS,
     progress_callback: Callable[[Sn60ReplicaContext, Sn60ReplicaResult], None] | None = None,
 ) -> list[Sn60ReplicaResult]:
@@ -411,10 +416,28 @@ def score_variant_on_projects(
                 )
             )
 
+    reusable_payloads = dict(reused_execution_payloads or {})
+    valid_reuse_keys = {(context.project_key, context.replica_index) for context in contexts}
+    unexpected_reuse_keys = set(reusable_payloads).difference(valid_reuse_keys)
+    if unexpected_reuse_keys:
+        raise ValueError(
+            "Reused execution payloads must match a selected project and replica: "
+            + ", ".join(
+                f"{project_key}/replica-{replica_index}"
+                for project_key, replica_index in sorted(unexpected_reuse_keys)
+            )
+        )
+
     def run_one(context: Sn60ReplicaContext) -> Sn60ReplicaResult:
         Path(context.reports_root).mkdir(parents=True, exist_ok=True)
         stage_bundle(artifact_root, Path(context.bundle_root))
-        report_payload = execution_hook(context)
+        reused_payload = reusable_payloads.get((context.project_key, context.replica_index))
+        # A passed admission screener has already performed the expensive sealed
+        # execution for this exact bundle + project. Reuse only its report here;
+        # the normal evaluator still runs and writes the standard scoring artifacts.
+        report_payload = (
+            deepcopy(reused_payload) if reused_payload is not None else execution_hook(context)
+        )
         write_json(Path(context.report_path), report_payload)
         evaluation_payload = evaluation_hook(context, report_payload)
         write_json(Path(context.evaluation_path), evaluation_payload)

@@ -206,6 +206,50 @@ def test_run_sn60_plugin_round_writes_board_progress(tmp_path: Path) -> None:
     assert isinstance(progress["king"]["projects"], list) and progress["king"]["projects"]
 
 
+def test_run_sn60_plugin_round_reuses_passed_screener_as_first_replica(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sandbox_root, benchmark_path, king_root, _specs, paths = _build_inputs(tmp_path)
+    base_execute, evaluate = _detection_hooks()
+    calls: list[tuple[str, str, int]] = []
+
+    def execute(context):
+        calls.append((context.variant_name, context.project_key, context.replica_index))
+        payload = base_execute(context)
+        # The admission gate accepts an actual scoring-shaped report. Include the
+        # screening-required finding fields while retaining the test's detection
+        # value used by the evaluator.
+        payload["report"]["vulnerabilities"] = [
+            {
+                "title": "Missing authorization",
+                "description": "A" * 80,
+                "severity": "high",
+                "file": "contracts/Vault.sol",
+            }
+        ]
+        return payload
+
+    monkeypatch.setenv("KATA_SN60_ENABLE_SCREENER_PROJECT", "true")
+    result = run_sn60_plugin_round(
+        king_artifact_path=str(king_root),
+        candidates=[("cand-a", paths["cand-a"])],
+        config={
+            "sandbox_root": str(sandbox_root),
+            "benchmark_file": str(benchmark_path),
+            "sandbox_commit": "commit-reuse",
+            "project_keys": ["project-alpha"],
+            "replicas_per_project": 2,
+        },
+        output_root=str(tmp_path / "generic"),
+        plugin=Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate),
+    )
+
+    assert calls.count(("screening", "project-alpha", 1)) == 1
+    assert ("candidate", "project-alpha", 1) not in calls
+    assert calls.count(("candidate", "project-alpha", 2)) == 1
+    assert result.entries[0].candidate.successful_runs == 2
+
+
 def test_run_sn60_plugin_round_no_winner_when_king_unbeaten(tmp_path: Path) -> None:
     sandbox_root = tmp_path / "sandbox"
     benchmark_path = _write_benchmark(sandbox_root)

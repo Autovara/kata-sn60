@@ -7,9 +7,9 @@ subnet-neutral.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from kata.plugins.contract import (
     EnvSpec,
@@ -25,6 +25,7 @@ from kata_sn60.sn60_bitsec import (
     Sn60EvaluationHook,
     Sn60ExecutionHook,
     Sn60ReplicaResult,
+    Sn60ReusedExecutionPayloads,
     Sn60SandboxSource,
     Sn60VariantSummary,
     benchmark_version_key,
@@ -60,6 +61,12 @@ class Sn60Problems:
     replicas_per_project: int
     run_id: str
     round_cache_path: str | None = None
+    # One passed execution screener per candidate may be reused as the first
+    # scored replica. Entries are created only after the real TEE execution has
+    # passed report validation for the current bundle and sampled project.
+    screened_execution_payloads: Mapping[str, Sn60ReusedExecutionPayloads] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True)
@@ -174,6 +181,10 @@ class Sn60BitsecPlugin(SubnetPlugin):
                 base_evaluation_hook=evaluation_hook,
             )
 
+        reused_execution_payloads = (
+            problems.screened_execution_payloads.get(label) if label != "king" else None
+        )
+
         # Emit live per-replica progress through the generic callback, accumulating
         # SN60's running metrics + per-problem breakdown so the board fills in live.
         total = len(problems.project_keys) * problems.replicas_per_project
@@ -205,6 +216,7 @@ class Sn60BitsecPlugin(SubnetPlugin):
             sandbox_source=source,
             execution_hook=execution_hook,
             evaluation_hook=evaluation_hook,
+            reused_execution_payloads=reused_execution_payloads,
             progress_callback=_on_replica if context.progress is not None else None,
         )
         return Sn60RawRun(
