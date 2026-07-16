@@ -20,8 +20,14 @@ inference-key fallback.
    export KATA_SN60_RUNNER_IMAGE=registry/kata-sn60-runner@sha256:<approved-digest>
    ```
 
-3. In Phala, deliver `KATA_ROOM_AUTH_SECRET`, `GHCR_USER`, and `GHCR_TOKEN` as sealed secrets.
-   Set `KATA_SN60_TEE_IMAGE_DIGESTS_JSON` to a JSON object mapping every permitted Bitsec project
+3. In Phala, configure registry credentials for `ghcr.io` before startup. The pre-launch script
+   reads `DSTACK_DOCKER_REGISTRY`, `DSTACK_DOCKER_USERNAME`, and `DSTACK_DOCKER_PASSWORD` to pull
+   the outer SN60 runner image. Separately deliver `KATA_ROOM_AUTH_SECRET`, `GHCR_USER`, and
+   `GHCR_TOKEN` as sealed secrets to the running room; those credentials let it pull an approved
+   private problem image. The two logins happen at different stages and may use the same
+   package-read token.
+
+4. Set `KATA_SN60_TEE_IMAGE_DIGESTS_JSON` to a JSON object mapping every permitted Bitsec project
    key to its GHCR `sha256:<digest>`. Configure the generic runner's provider registry with
    `KATA_INFERENCE_GATEWAY_PROVIDER_ROUTES_JSON`. It maps reviewed provider ids to exact endpoints
    and authentication formats. For example, it may enable `openrouter`, `chutes`, and `akashml`
@@ -29,11 +35,12 @@ inference-key fallback.
    settings unchanged to the route selected by that miner's encrypted descriptor. Never accept a
    miner-supplied provider URL.
 
-4. Set `KATA_ROOM_BIND_ADDRESS` to a private validator-reachable address. Keep the default loopback
-   binding for local testing. Do not expose port 8080 to the internet; HMAC authentication is a
-   second control, not a replacement for network isolation.
+5. In Phala, allow gateway port `8080` and use its HTTPS endpoint as `KATA_SN60_ROOM_URL`. The
+   Compose file deliberately exposes `8080:8080` for this external validator-to-room connection.
+   `/health` and `/pubkey` are public, while `/run` accepts only signed, short-lived, one-time HMAC
+   requests using `KATA_ROOM_AUTH_SECRET`.
 
-5. Allowlist the final image's TEE measurement in the validator's
+6. Allowlist the final image's TEE measurement in the validator's
    `KATA_SN60_ROOM_MEASUREMENTS`, configure the validator with an HTTPS `KATA_SN60_ROOM_URL`, and
    give both sides the same `KATA_ROOM_AUTH_SECRET`.
 

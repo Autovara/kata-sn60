@@ -3,11 +3,9 @@ services:
     # Digest, not a mutable tag: the value must match the approved TEE measurement policy.
     image: ${KATA_SN60_RUNNER_IMAGE:?Set an immutable runner image, for example registry/runner@sha256:...}
     ports:
-      # /run runs a caller-supplied agent with a decrypted inference key — it MUST NOT be publicly
-      # reachable. It is authenticated (HMAC over the body, see room.auth), but ALSO firewall this
-      # port so only the validator host can reach it (e.g. bind to a private interface / security
-      # group). Do not leave 8080 open to the internet.
-      - "${KATA_ROOM_BIND_ADDRESS:-127.0.0.1}:8080:8080"
+      # Phala exposes this port through its HTTPS gateway so the external validator can reach the
+      # room. /health and /pubkey are public; /run requires a signed, short-lived HMAC request.
+      - "8080:8080"
     environment:
       # Shared secret the room requires on /run so only this validator can invoke a run
       # (delivered sealed, like the other secrets). Must match the validator's KATA_ROOM_AUTH_SECRET.
