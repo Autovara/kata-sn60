@@ -85,7 +85,13 @@ class Sn60BitsecPlugin(SubnetPlugin):
     evaluator_id = "sn60_bitsec"
     pack = SN60_MINER_LANE_ID  # "sn60__bitsec"
     mode = "miner"
-    scoring_profile = ScoringProfile.DETERMINISTIC
+    # SN60 scores come from LLM-driven vulnerability detection plus an LLM judge, so
+    # a variant's score drifts run-to-run even on a fixed benchmark. The score is
+    # therefore NOISY (score each contender afresh); the king is re-scored every round.
+    # The benchmark/answer-key is deterministic, but the scoring pipeline is not, so
+    # this must never be labelled DETERMINISTIC (which would sanction a persistent,
+    # cross-round score cache that compares a stale king against fresh candidates).
+    scoring_profile = ScoringProfile.NOISY
     validator_identity = SN60_VALIDATOR_MODEL  # "sn60-bitsec-sandbox"
 
     def __init__(

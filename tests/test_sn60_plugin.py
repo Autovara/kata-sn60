@@ -95,7 +95,7 @@ def test_sn60_plugin_identity_and_env() -> None:
     assert plugin.evaluator_id == "sn60_bitsec"
     assert plugin.pack == "sn60__bitsec"
     assert plugin.mode == "miner"
-    assert plugin.scoring_profile is ScoringProfile.DETERMINISTIC
+    assert plugin.scoring_profile is ScoringProfile.NOISY
     assert plugin.validator_identity == "sn60-bitsec-sandbox"
     assert plugin.environment_spec().network == "relay_only"
     assert plugin.environment_spec().execution == "tee"
