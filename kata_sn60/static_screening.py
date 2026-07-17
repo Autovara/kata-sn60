@@ -10,6 +10,7 @@ import ast
 from pathlib import Path
 
 from kata.ast_utils import (
+    count_module_function_defs,
     find_module_async_function_def,
     find_module_function_def,
     function_supports_no_arg_invocation,
@@ -126,6 +127,22 @@ def screen_sn60_static_bundle(bundle_files: dict[str, str]) -> list[ScreeningFin
                 line=line_number,
             )
         ]
+
+    # Screening inspects the first agent_main, but the sandbox runner executes
+    # the last binding Python keeps, so a decoy-first + shadow-last pair could
+    # otherwise slip a no-op or answer-bank body past every single-definition
+    # check below. Require exactly one top-level agent_main definition.
+    if count_module_function_defs(tree, "agent_main") > 1:
+        findings.append(
+            reject_finding(
+                "sn60.agent_main_duplicate",
+                "Submission defines agent_main more than once; define it exactly "
+                "once. The SN60 runner executes the last definition, which "
+                "screening cannot validate.",
+                path=AGENT_ENTRY_FILENAME,
+            )
+        )
+        return dedupe_findings(findings)
 
     agent_main = find_module_function_def(tree, "agent_main")
     if agent_main is None:

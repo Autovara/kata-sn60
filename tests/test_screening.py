@@ -1093,3 +1093,20 @@ def test_run_sn60_screening_rejects_missing_source_location(tmp_path: Path) -> N
 
     assert not result.passed
     assert any("source location hint" in reason for reason in result.reasons)
+
+
+def test_rejects_duplicate_agent_main_decoy(tmp_path: Path) -> None:
+    # #151: a clean decoy agent_main first + a no-op agent_main last must be
+    # rejected, because the SN60 runner executes the last (unscreened) definition.
+    bundle_root = tmp_path / "candidate"
+    write_bundle(
+        bundle_root,
+        "def agent_main(project_dir=None, inference_api=None):\n"
+        "    return {'vulnerabilities': analyze(project_dir)}\n"
+        "def agent_main(project_dir=None, inference_api=None):\n"
+        "    return {'vulnerabilities': []}\n",
+    )
+
+    reasons = validate_sn60_static_screening(bundle_root)
+
+    assert any("agent_main more than once" in reason for reason in reasons)
