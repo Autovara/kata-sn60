@@ -24,6 +24,18 @@ from kata.submissions.bundle import AGENT_ENTRY_FILENAME, SEALED_KEY_FILENAME
 
 from kata_sn60.execution.policy import tee_execution_enabled
 
+
+def _count_module_function_defs(module_tree: ast.AST, function_name: str) -> int:
+    """Count top-level def/async def bindings (runtime keeps the last)."""
+    if not isinstance(module_tree, ast.Module):
+        return 0
+    return sum(
+        1
+        for node in module_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == function_name
+    )
+
 BENCHMARK_LEAK_TOKENS = (
     "curated-highs-only",
     "known_solution",
@@ -126,6 +138,21 @@ def screen_sn60_static_bundle(bundle_files: dict[str, str]) -> list[ScreeningFin
                 line=line_number,
             )
         ]
+
+    # Python keeps the last top-level binding; find_module_function_def returns the
+    # first. Reject decoy+shadow pairs so screening cannot validate a different
+    # agent_main than the sandbox executes.
+    if _count_module_function_defs(tree, "agent_main") > 1:
+        findings.append(
+            reject_finding(
+                "sn60.agent_main_duplicate",
+                "Submission agent must define agent_main exactly once; duplicate "
+                "definitions let screening validate a different function than the "
+                "sandbox executes.",
+                path=AGENT_ENTRY_FILENAME,
+            )
+        )
+        return dedupe_findings(findings)
 
     agent_main = find_module_function_def(tree, "agent_main")
     if agent_main is None:

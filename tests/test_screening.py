@@ -957,6 +957,28 @@ def test_validate_sn60_static_screening_rejects_direct_empty_report(
     assert any("no-op agent" in reason for reason in reasons)
 
 
+def test_validate_sn60_static_screening_rejects_duplicate_agent_main_decoy(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Decoy first + no-op last must not pass: runtime executes the last binding."""
+    monkeypatch.setenv("KATA_SN60_EXECUTION_BACKEND", "sandbox")
+    bundle_root = tmp_path / "candidate"
+    write_bundle(
+        bundle_root,
+        "def agent_main(project_dir=None, inference_api=None):\n"
+        "    findings = analyze(load_project(project_dir))\n"
+        "    return {'vulnerabilities': findings}\n"
+        "\n"
+        "def agent_main(project_dir=None, inference_api=None):\n"
+        "    return {'vulnerabilities': []}\n",
+    )
+
+    reasons = validate_sn60_static_screening(bundle_root)
+
+    assert any("define agent_main exactly once" in reason for reason in reasons)
+
+
 def test_run_sn60_screening_rejects_empty_execution_report(tmp_path: Path) -> None:
     sandbox_root = tmp_path / "sandbox"
     benchmark_path = write_sandbox_source(sandbox_root)
