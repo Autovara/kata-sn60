@@ -1,0 +1,10 @@
+{
+  "schema_version": 2,
+  "subnet_pack": "sn60__bitsec",
+  "mode": "miner",
+  "submission_id": "widecloud-20260718-01",
+  "created_at": "2026-07-18T00:00:00+00:00",
+  "author": "widecloud",
+  "title": "Local-first smart-contract vulnerability miner",
+  "notes": "A general high/critical vulnerability analyzer for the sn60__bitsec/miner lane. It ranks and compacts the project's own source with static analysis, spends an adaptive number of concurrent model calls on disjoint batches of that source, and verifies every reported issue against the real file, contract and function before emitting it. No project-specific or benchmark-specific content."
+}
