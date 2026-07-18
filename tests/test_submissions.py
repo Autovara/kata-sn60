@@ -1242,3 +1242,42 @@ def test_verify_and_promote_honor_explicit_public_root(
     # Nothing was written to the decoy KATA_ROOT.
     assert not (decoy_root / "kings").exists()
     assert not (decoy_root / "lanes").exists()
+
+
+def test_candidate_only_promotion_skips_king_and_benchmark_staleness(tmp_path, monkeypatch):
+    public_root, submission_root, _summary, summary_path = run_registry_lane_sn60_duel(
+        tmp_path, monkeypatch
+    )
+    # Rewrite the recorded result as a candidate-only recovery win whose king hash
+    # no longer matches the current king (candidate-only never dueled the king).
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    payload["primary"]["competition_mode"] = "candidate_only"
+    payload["king_artifact_hash"] = "0" * 64  # stale / not the current king
+    summary_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    verification = verify_submission_result(str(submission_root), str(summary_path))
+    # King- and benchmark-currency staleness are skipped for candidate-only recovery.
+    assert verification.king_is_current
+    assert verification.benchmark_is_current
+    assert verification.auto_merge_ready
+
+    result = promote_submission_result(
+        str(submission_root), str(summary_path), public_root=str(public_root)
+    )
+    assert result.lane_id == "sn60__bitsec"
+
+
+def test_king_duel_still_rejects_a_stale_king_hash(tmp_path, monkeypatch):
+    _public_root, submission_root, _summary, summary_path = run_registry_lane_sn60_duel(
+        tmp_path, monkeypatch
+    )
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    # A normal king-duel result with a stale king hash must STILL be rejected --
+    # the skip only applies to candidate-only recovery.
+    assert payload["primary"]["competition_mode"] == "king_duel"
+    payload["king_artifact_hash"] = "0" * 64
+    summary_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    verification = verify_submission_result(str(submission_root), str(summary_path))
+    assert not verification.king_is_current
+    assert not verification.auto_merge_ready

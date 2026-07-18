@@ -96,6 +96,17 @@ class ChallengeSummary:
     promotion_ready: bool
     promotion_reason: str
 
+    @property
+    def is_candidate_only(self) -> bool:
+        """True when the round skipped king evaluation (candidate-only recovery).
+
+        The maintainer opted out of king validation (``KATA_ROUND_CANDIDATE_ONLY``),
+        so the generic verifier skips the king- and benchmark-currency staleness
+        guards for this result and promotes the top candidate. SN60 still requires
+        at least one true positive via ``extra_verification_reasons``.
+        """
+        return self.primary.competition_mode == "candidate_only"
+
 
 @dataclass(frozen=True)
 class Sn60PromotionDecision:
