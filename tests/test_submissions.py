@@ -1244,19 +1244,21 @@ def test_verify_and_promote_honor_explicit_public_root(
     assert not (decoy_root / "lanes").exists()
 
 
-def test_candidate_only_promotion_skips_king_and_benchmark_staleness(tmp_path, monkeypatch):
+def test_candidate_only_matching_king_is_honored(tmp_path, monkeypatch):
+    # A candidate-only recovery run against the CURRENT king (a deliberate
+    # force-replace) legitimately skips the king/benchmark staleness guards. The round
+    # recorded the current king's hash via the lane hasher, so verify -- which now
+    # resolves the current king with that same hasher (BUG-14) -- sees a match and
+    # honors the candidate-only bypass.
     public_root, submission_root, _summary, summary_path = run_registry_lane_sn60_duel(
         tmp_path, monkeypatch
     )
-    # Rewrite the recorded result as a candidate-only recovery win whose king hash
-    # no longer matches the current king (candidate-only never dueled the king).
     payload = json.loads(summary_path.read_text(encoding="utf-8"))
     payload["primary"]["competition_mode"] = "candidate_only"
-    payload["king_artifact_hash"] = "0" * 64  # stale / not the current king
+    # Keep the recorded king_artifact_hash: it already matches the current king.
     summary_path.write_text(json.dumps(payload), encoding="utf-8")
 
     verification = verify_submission_result(str(submission_root), str(summary_path))
-    # King- and benchmark-currency staleness are skipped for candidate-only recovery.
     assert verification.king_is_current
     assert verification.benchmark_is_current
     assert verification.auto_merge_ready
@@ -1265,6 +1267,25 @@ def test_candidate_only_promotion_skips_king_and_benchmark_staleness(tmp_path, m
         str(submission_root), str(summary_path), public_root=str(public_root)
     )
     assert result.lane_id == "sn60__bitsec"
+
+
+def test_candidate_only_stale_king_is_now_blocked(tmp_path, monkeypatch):
+    # BUG-8: a held candidate-only result whose king has since changed must NOT bypass
+    # the staleness guard -- it could otherwise be promoted over a king it never
+    # actually evaluated against. Now that the recorded and current king hashes use
+    # the same lane hasher, the mismatch is detected and the promotion is blocked.
+    _public_root, submission_root, _summary, summary_path = run_registry_lane_sn60_duel(
+        tmp_path, monkeypatch
+    )
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    payload["primary"]["competition_mode"] = "candidate_only"
+    payload["king_artifact_hash"] = "0" * 64  # a king exists, but this is not it
+    summary_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    verification = verify_submission_result(str(submission_root), str(summary_path))
+    assert not verification.king_is_current
+    assert not verification.auto_merge_ready
+    assert any("king artifact has changed" in reason for reason in verification.reasons)
 
 
 def test_king_duel_still_rejects_a_stale_king_hash(tmp_path, monkeypatch):
