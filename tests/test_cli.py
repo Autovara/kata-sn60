@@ -21,6 +21,8 @@ def test_sn60_round_result_json_preserves_projects_and_execution_screening() -> 
         f1_score=0.0,
         invalid_runs=1,
         codebase_pass_count=0,
+        artifact_hash="hash-23",
+        successful_runs=1,
         project_summaries=[],
     )
     screening = {
@@ -57,6 +59,58 @@ def test_sn60_round_result_json_preserves_projects_and_execution_screening() -> 
     assert payload["project_keys"] == ["project-alpha"]
     assert payload["replicas_per_project"] == 1
     assert payload["entries"][0]["screening_result"] == screening
+
+
+def test_sn60_variant_detail_carries_the_bot_consumed_contract_fields() -> None:
+    # The bot keys its running-average ledger on the king's artifact_hash and decides
+    # king-bar collapse / per-project infra-failure from successful_runs. These MUST be
+    # in the stdout the bot consumes, not only in round_summary.json. Guards the shape
+    # mismatch that silently made continuous scoring inert.
+    project = types.SimpleNamespace(
+        project_key="project-alpha",
+        passed=True,
+        successful_runs=3,
+        average_detection_rate=0.5,
+        true_positives=6,
+        total_expected=12,
+        total_found=6,
+        precision=1.0,
+        f1_score=0.5,
+    )
+    king = types.SimpleNamespace(
+        artifact_hash="king-hash-abc",
+        aggregated_score=0.5,
+        average_detection_rate=0.5,
+        true_positives=6,
+        total_expected=12,
+        total_found=6,
+        precision=1.0,
+        f1_score=0.5,
+        successful_runs=3,
+        invalid_runs=0,
+        codebase_pass_count=1,
+        project_summaries=[project],
+    )
+    result = types.SimpleNamespace(
+        run_id="r",
+        output_root="/tmp/r",
+        winner_submission_id=None,
+        winner_challenge_summary_path=None,
+        promotion_ready=False,
+        promotion_reason="x",
+        competition_mode="king_duel",
+        king_skipped_reason=None,
+        replicas_per_project=3,
+        project_keys=["project-alpha"],
+        king=king,
+        entries=[],
+    )
+
+    payload = sn60_round_result_json(result)
+    king_json = payload["king"]
+    assert king_json["artifact_hash"] == "king-hash-abc"
+    assert king_json["successful_runs"] == 3
+    assert king_json["projects"][0]["successful_runs"] == 3
 
 
 def test_top_level_cli_exposes_agent_competition_commands() -> None:
@@ -255,6 +309,8 @@ def test_round_cli_parses_candidates_and_emits_json(monkeypatch, capsys) -> None
             f1_score=0.4,
             invalid_runs=0,
             codebase_pass_count=1,
+            artifact_hash="hash-257",
+            successful_runs=1,
             project_summaries=[],
         ),
         entries=[
@@ -273,6 +329,8 @@ def test_round_cli_parses_candidates_and_emits_json(monkeypatch, capsys) -> None
                     f1_score=0.5,
                     invalid_runs=0,
                     codebase_pass_count=2,
+                    artifact_hash="hash-275",
+                    successful_runs=1,
                     project_summaries=[],
                 ),
             )
@@ -345,6 +403,8 @@ def test_round_cli_supports_candidate_only_mode(monkeypatch, capsys) -> None:
                     f1_score=0.5,
                     invalid_runs=0,
                     codebase_pass_count=2,
+                    artifact_hash="hash-347",
+                    successful_runs=1,
                     project_summaries=[],
                 ),
             )
@@ -426,6 +486,8 @@ def test_round_cli_samples_problems_when_keys_omitted(tmp_path, monkeypatch, cap
                 f1_score=0.0,
                 invalid_runs=0,
                 codebase_pass_count=0,
+                artifact_hash="hash-428",
+                successful_runs=1,
                 project_summaries=[],
             ),
             entries=[],

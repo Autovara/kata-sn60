@@ -76,8 +76,16 @@ def sn60_round_result_json(result) -> dict:
 
 def sn60_variant_detail(variant) -> dict:
     """Serialize a variant summary (king or candidate) with its per-project
-    breakdown so the dashboard can render a detailed per-PR duel view."""
+    breakdown so the dashboard can render a detailed per-PR duel view.
+
+    ``artifact_hash`` and ``successful_runs`` (top-level and per-project) are part of
+    the consumed contract, not just dashboard detail: the bot keys the king's
+    running-average ledger on ``artifact_hash`` and decides whether a variant's king
+    bar collapsed / a project infra-failed from ``successful_runs``. They must ride in
+    this stdout payload, never only in the ``round_summary.json`` file.
+    """
     return {
+        "artifact_hash": variant.artifact_hash,
         "aggregated_score": variant.aggregated_score,
         "detection_score": variant.aggregated_score,
         "sn60_pass_score": sn60_pass_score(variant),
@@ -87,12 +95,14 @@ def sn60_variant_detail(variant) -> dict:
         "total_found": variant.total_found,
         "precision": variant.precision,
         "f1_score": variant.f1_score,
+        "successful_runs": variant.successful_runs,
         "invalid_runs": variant.invalid_runs,
         "codebase_pass_count": variant.codebase_pass_count,
         "projects": [
             {
                 "project_key": project.project_key,
                 "passed": project.passed,
+                "successful_runs": project.successful_runs,
                 "detection_rate": project.average_detection_rate,
                 "true_positives": project.true_positives,
                 "total_expected": project.total_expected,
