@@ -236,8 +236,9 @@ def sn60_codebase_pass_count(replica_results: list[Sn60ReplicaResult]) -> int:
     passes = 0
     for project_key in {result.project_key for result in replica_results}:
         project_replicas = [r for r in replica_results if r.project_key == project_key]
-        pass_count = sum(1 for r in project_replicas if r.result == "PASS")
-        if project_passes(pass_count=pass_count, replica_count=len(project_replicas)):
+        successful = [r for r in project_replicas if r.evaluation_status == "success"]
+        pass_count = sum(1 for r in successful if r.result == "PASS")
+        if project_passes(pass_count=pass_count, successful_runs=len(successful)):
             passes += 1
     return passes
 
@@ -682,10 +683,16 @@ def summarize_variant(
         )
         for project_key in project_keys
     ]
-    detection_rates = [result.detection_rate for result in replica_results]
-    true_positives = sum(result.true_positives for result in replica_results)
-    total_expected = sum(result.total_expected for result in replica_results)
-    total_found = sum(result.total_found for result in replica_results)
+    successful = [
+        result for result in replica_results if result.evaluation_status == "success"
+    ]
+    detection_rates = [result.detection_rate for result in successful]
+    # Sum the per-project best-of aggregates (not the raw replicas): invalid
+    # replicas are already excluded inside summarize_project, so a variant that
+    # flaked a replica is never deflated on true_positives / found / expected.
+    true_positives = sum(project.true_positives for project in project_summaries)
+    total_expected = sum(project.total_expected for project in project_summaries)
+    total_found = sum(project.total_found for project in project_summaries)
     precision = true_positives / total_found if total_found else 0.0
     aggregated_score = true_positives / total_expected if total_expected else 0.0
     f1_score = (
@@ -698,9 +705,7 @@ def summarize_variant(
         variant_name=variant_name,
         artifact_path=str(artifact_root),
         artifact_hash=artifact_hash,
-        successful_runs=sum(
-            1 for result in replica_results if result.evaluation_status == "success"
-        ),
+        successful_runs=len(successful),
         invalid_runs=sum(1 for result in replica_results if result.evaluation_status != "success"),
         pass_count=sum(1 for result in replica_results if result.result == "PASS"),
         codebase_pass_count=codebase_pass_count,
@@ -723,11 +728,36 @@ def summarize_project(
     project_key: str,
     replica_results: list[Sn60ReplicaResult],
 ) -> Sn60ProjectAggregate:
-    detection_rates = [result.detection_rate for result in replica_results]
-    pass_count = sum(1 for result in replica_results if result.result == "PASS")
-    true_positives = sum(result.true_positives for result in replica_results)
-    total_expected = sum(result.total_expected for result in replica_results)
-    total_found = sum(result.total_found for result in replica_results)
+    successful = [
+        result for result in replica_results if result.evaluation_status == "success"
+    ]
+    detection_rates = [result.detection_rate for result in successful]
+    pass_count = sum(1 for result in successful if result.result == "PASS")
+    if successful:
+        # Best-of: a project's score is that of its best successful replica, so an
+        # invalid (infra-failed) replica can never lower it. "Best" follows the
+        # promotion-rank order -- most true positives, then precision, then
+        # detection rate.
+        best = max(
+            successful,
+            key=lambda result: (
+                result.true_positives,
+                result.precision,
+                result.detection_rate,
+            ),
+        )
+        true_positives = best.true_positives
+        total_found = best.total_found
+        total_expected = best.total_expected
+    else:
+        # Every replica on this project failed for infrastructure reasons: there is
+        # no valid score. Keep the benchmark's expected count (back-filled onto
+        # invalid replicas) so detection reads as 0-of-N rather than 0-of-0.
+        true_positives = 0
+        total_found = 0
+        total_expected = next(
+            (result.total_expected for result in replica_results), 0
+        )
     detection_rate = true_positives / total_expected if total_expected else 0.0
     precision = true_positives / total_found if total_found else 0.0
     f1_score = (
@@ -738,12 +768,10 @@ def summarize_project(
     return Sn60ProjectAggregate(
         project_key=project_key,
         replica_count=len(replica_results),
-        successful_runs=sum(
-            1 for result in replica_results if result.evaluation_status == "success"
-        ),
-        invalid_runs=sum(1 for result in replica_results if result.evaluation_status != "success"),
+        successful_runs=len(successful),
+        invalid_runs=len(replica_results) - len(successful),
         pass_count=pass_count,
-        passed=project_passes(pass_count=pass_count, replica_count=len(replica_results)),
+        passed=project_passes(pass_count=pass_count, successful_runs=len(successful)),
         average_detection_rate=fmean(detection_rates) if detection_rates else 0.0,
         true_positives=true_positives,
         total_expected=total_expected,
@@ -753,15 +781,18 @@ def summarize_project(
     )
 
 
-def project_passes(*, pass_count: int, replica_count: int) -> bool:
-    """Codebase-level binary PASS using the configured replica count.
+def project_passes(*, pass_count: int, successful_runs: int) -> bool:
+    """Codebase-level binary PASS over the SUCCESSFUL replicas.
 
-    Production uses 3 replicas per selected project, so 2/3 passes. Other replica
-    counts use the same two-thirds majority threshold.
+    Production uses 3 replicas per selected project, so 2/3 passes. Invalid
+    (infra-failed) replicas are excluded from the denominator: a transient
+    failure must never turn a project a variant would otherwise pass into a fail.
+    Infra flakiness is accounted for only via invalid_runs -- the low-priority
+    promotion-rank tiebreaker -- never the pass count.
     """
-    if replica_count <= 0:
+    if successful_runs <= 0:
         return False
-    return pass_count * 3 >= replica_count * 2
+    return pass_count * 3 >= successful_runs * 2
 
 
 def build_replica_result(

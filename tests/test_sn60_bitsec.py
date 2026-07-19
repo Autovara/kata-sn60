@@ -30,7 +30,10 @@ from kata_sn60.sn60_bitsec import (
     sn60_codebase_pass_count,
     sn60_container_name,
     sn60_synthetic_ids,
+    summarize_project,
+    summarize_variant,
 )
+from kata_sn60.validator_system.challenge import sn60_variant_rank
 
 
 def write_bundle(root: Path, *, agent_source: str, helper_source: str | None = None) -> None:
@@ -156,7 +159,10 @@ def test_run_sn60_bitsec_duel_stages_full_bundle_and_persists_outputs(tmp_path: 
     assert summary.sandbox_source.benchmark_file == str(benchmark_path.resolve())
     assert summary.king.invalid_runs == 1
     assert summary.candidate.invalid_runs == 0
-    assert summary.king.average_detection_rate == 0.1875
+    # average_detection_rate is now a mean over the SUCCESSFUL replicas only, so the
+    # king's one invalid replica no longer drags the diagnostic down (0.75/3 == 0.25
+    # rather than the old 0.75/4 == 0.1875).
+    assert summary.king.average_detection_rate == 0.25
     assert summary.candidate.average_detection_rate == 1.0
     assert summary.candidate.pass_count == 4
     assert summary.candidate.codebase_pass_count == 2
@@ -710,14 +716,17 @@ def test_malformed_agent_report_is_recorded_failure_not_a_crash(
     assert good == {"success": True, "report": {}}
 
 
-def test_project_passes_uses_configured_replica_threshold() -> None:
-    assert project_passes(pass_count=2, replica_count=3)
-    assert project_passes(pass_count=3, replica_count=3)
-    assert not project_passes(pass_count=1, replica_count=3)
-    assert not project_passes(pass_count=0, replica_count=3)
-    assert project_passes(pass_count=1, replica_count=1)
-    assert not project_passes(pass_count=1, replica_count=2)
-    assert not project_passes(pass_count=0, replica_count=0)
+def test_project_passes_uses_successful_replica_threshold() -> None:
+    # The two-thirds majority is now taken over the SUCCESSFUL replicas so that
+    # invalid (infra-failed) replicas never fail a project by inflating the
+    # denominator.
+    assert project_passes(pass_count=2, successful_runs=3)
+    assert project_passes(pass_count=3, successful_runs=3)
+    assert not project_passes(pass_count=1, successful_runs=3)
+    assert not project_passes(pass_count=0, successful_runs=3)
+    assert project_passes(pass_count=1, successful_runs=1)
+    assert not project_passes(pass_count=1, successful_runs=2)
+    assert not project_passes(pass_count=0, successful_runs=0)
 
 
 def test_resolve_sn60_sandbox_source_rejects_mismatched_pinned_commit(
@@ -1173,6 +1182,109 @@ def test_codebase_pass_count_uses_configured_replica_threshold() -> None:
         _replica("c", None, status="error"),
     ]
     assert sn60_codebase_pass_count(results) == 1
+
+
+def _scored_replica(
+    project_key: str,
+    *,
+    true_positives: int,
+    total_expected: int,
+    total_found: int,
+    result: str | None = None,
+    status: str = "success",
+) -> Sn60ReplicaResult:
+    detection_rate = true_positives / total_expected if total_expected else 0.0
+    precision = true_positives / total_found if total_found else 0.0
+    return Sn60ReplicaResult(
+        project_key=project_key,
+        replica_index=1,
+        report_path="",
+        evaluation_path="",
+        execution_success=status == "success",
+        evaluation_status=status,
+        score=detection_rate,
+        detection_rate=detection_rate,
+        result=result,
+        true_positives=true_positives,
+        total_expected=total_expected,
+        total_found=total_found,
+        precision=precision,
+        f1_score=0.0,
+    )
+
+
+def test_summarize_project_uses_best_of_successful_replicas() -> None:
+    # Two successful replicas (best finds 7 TP) plus one invalid replica. The
+    # project score is that of the best successful replica -- the invalid replica
+    # neither lowers true_positives nor inflates the expected denominator.
+    project = summarize_project(
+        project_key="p",
+        replica_results=[
+            _scored_replica("p", true_positives=5, total_expected=10, total_found=8),
+            _scored_replica("p", true_positives=7, total_expected=10, total_found=9),
+            _scored_replica("p", true_positives=0, total_expected=10, total_found=0, status="error"),
+        ],
+    )
+    assert project.true_positives == 7  # best-of, not the 12 a pooled sum would give
+    assert project.total_expected == 10  # one benchmark count, not 30
+    assert project.total_found == 9
+    assert project.successful_runs == 2
+    assert project.invalid_runs == 1
+
+
+def test_project_pass_not_failed_by_invalid_replicas() -> None:
+    # One successful PASS plus two invalid replicas: the project passes on the
+    # successful-replica majority (1 of 1) instead of failing on the old 1-of-3.
+    project = summarize_project(
+        project_key="p",
+        replica_results=[
+            _scored_replica("p", true_positives=10, total_expected=10, total_found=10, result="PASS"),
+            _scored_replica("p", true_positives=0, total_expected=10, total_found=0, status="error"),
+            _scored_replica("p", true_positives=0, total_expected=10, total_found=0, status="error"),
+        ],
+    )
+    assert project.passed is True
+    assert project.pass_count == 1
+    assert project.successful_runs == 1
+
+
+def test_flaked_candidate_still_outranks_a_weaker_king() -> None:
+    # BUG-1 regression: a genuinely stronger candidate that flakes one replica must
+    # still beat a fully-successful but weaker king. Under the old pooled-sum
+    # aggregation the flake deflated the candidate's true_positives and flipped the
+    # winner; best-of over the successful replicas keeps the candidate ahead, and
+    # invalid_runs stays only the low-priority rank tiebreaker.
+    def variant(name: str, per_project_tp: int, *, flake_last: bool = False):
+        replicas = []
+        for project_key in ("a", "b"):
+            for idx in range(3):
+                invalid = flake_last and project_key == "b" and idx == 2
+                replicas.append(
+                    _scored_replica(
+                        project_key,
+                        true_positives=0 if invalid else per_project_tp,
+                        total_expected=10,
+                        total_found=0 if invalid else per_project_tp,
+                        status="error" if invalid else "success",
+                    )
+                )
+        return summarize_variant(
+            variant_name=name,
+            artifact_root=Path("/tmp") / name,
+            artifact_hash=name,
+            replica_results=replicas,
+        )
+
+    king = variant("king", 5)  # 5 TP/project, every replica valid
+    candidate = variant("candidate", 7, flake_last=True)  # stronger, but one flaked replica
+
+    assert king.invalid_runs == 0
+    assert candidate.invalid_runs == 1
+    # best-of keeps the candidate at 7+7=14 TP (not deflated) vs the king's 5+5=10.
+    assert candidate.true_positives == 14
+    assert king.true_positives == 10
+    # true_positives is rank field 3, so the candidate wins the promotion rank.
+    assert sn60_variant_rank(candidate) > sn60_variant_rank(king)
 
 
 def test_duel_ignores_legacy_early_stop_env_and_runs_full_grid(tmp_path, monkeypatch) -> None:
