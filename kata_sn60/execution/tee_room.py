@@ -23,13 +23,32 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import http.client
 import json
 import os
+import random
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
+
+# A room run is retried only on transient TRANSPORT failures: a connection reset/
+# refused/dropped ("Remote end closed connection"), a socket timeout, or a
+# 502/503/504 from the fronting gateway. Anything else (a 4xx, a room error
+# payload, a failed attestation) is a real rejection and must not be retried.
+_RETRYABLE_ROOM_HTTP_STATUS = frozenset({502, 503, 504})
+ROOM_MAX_ATTEMPTS_ENV = "KATA_SN60_ROOM_MAX_ATTEMPTS"
+ROOM_RETRY_BASE_SECONDS_ENV = "KATA_SN60_ROOM_RETRY_BASE_SECONDS"
+
+
+class RoomTransportError(RuntimeError):
+    """A transient transport failure reaching the room.
+
+    Distinct from a verified rejection or an agent fault so the caller can retry
+    it -- with a freshly minted nonce, because the room's single-use replay guard
+    rejects a reused nonce.
+    """
 
 # Shared HMAC secret the room requires on /run (room.auth). Must match the room's
 # KATA_ROOM_AUTH_SECRET so only this validator can invoke a run.
@@ -225,41 +244,64 @@ def evaluate_candidate_in_room(
     agent_ref: str,
     project_key: str,
     sealed_key_ref: str,
-    nonce: bytes,
+    mint_nonce: Callable[[], bytes],
     bundle_sha256: str,
     policy: RoomPolicy,
     launcher: RoomLauncher,
     verifier: QuoteVerifier,
     seen_nonces: set | None = None,
+    max_attempts: int | None = None,
 ) -> CandidateOutcome:
-    try:
-        result = launcher.launch_and_run(
-            candidate_id=candidate_id,
-            agent_ref=agent_ref,
-            project_key=project_key,
-            nonce=nonce,
-            sealed_key_ref=sealed_key_ref,
-            bundle_sha256=bundle_sha256,
-        )
-    except Exception as exc:  # noqa: BLE001 - a room failure is a failed run, not a crash
-        return CandidateOutcome(False, None, f"room run failed: {exc}")
-    if result.bundle_sha256 != bundle_sha256:
-        return CandidateOutcome(False, None, "room returned a different candidate bundle hash")
+    """Run one candidate in the room, retrying only transient transport failures.
 
-    verdict = verify_room_run(
-        quote_hex=result.quote_hex,
-        report=result.report,
-        nonce=nonce,
-        project_key=project_key,
-        bundle_sha256=bundle_sha256,
-        provenance=result.provenance,
-        policy=policy,
-        verifier=verifier,
-        seen_nonces=seen_nonces,
-    )
-    if not verdict.accepted:
-        return CandidateOutcome(False, None, verdict.reason)
-    return CandidateOutcome(True, result.report, "ok")
+    A dropped connection / socket timeout / 502-504 (``RoomTransportError``) is
+    retried with a FRESH nonce -- the room's single-use replay guard would 409 a
+    reused one. A verified rejection, a bad bundle hash, or any other room failure
+    is returned immediately (no retry): each is a real, non-transient fault.
+    """
+    attempts = resolve_room_max_attempts() if max_attempts is None else max(1, max_attempts)
+    transport_reason = "room run failed"
+    for attempt in range(1, attempts + 1):
+        nonce = mint_nonce()
+        try:
+            result = launcher.launch_and_run(
+                candidate_id=candidate_id,
+                agent_ref=agent_ref,
+                project_key=project_key,
+                nonce=nonce,
+                sealed_key_ref=sealed_key_ref,
+                bundle_sha256=bundle_sha256,
+            )
+        except RoomTransportError as exc:
+            transport_reason = str(exc)
+            if attempt < attempts:
+                time.sleep(_room_retry_backoff_seconds(attempt))
+                continue
+            return CandidateOutcome(
+                False, None, f"room unreachable after {attempts} attempt(s): {transport_reason}"
+            )
+        except Exception as exc:  # noqa: BLE001 - a non-transport room failure is not retryable
+            return CandidateOutcome(False, None, f"room run failed: {exc}")
+
+        if result.bundle_sha256 != bundle_sha256:
+            return CandidateOutcome(False, None, "room returned a different candidate bundle hash")
+
+        verdict = verify_room_run(
+            quote_hex=result.quote_hex,
+            report=result.report,
+            nonce=nonce,
+            project_key=project_key,
+            bundle_sha256=bundle_sha256,
+            provenance=result.provenance,
+            policy=policy,
+            verifier=verifier,
+            seen_nonces=seen_nonces,
+        )
+        if not verdict.accepted:
+            return CandidateOutcome(False, None, verdict.reason)
+        return CandidateOutcome(True, result.report, "ok")
+
+    return CandidateOutcome(False, None, transport_reason)
 
 
 def _bundle_tar_b64(bundle_root: str) -> str:
@@ -327,9 +369,20 @@ class HttpRoomLauncher:
                 data = json.loads(resp.read().decode())
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")[:400]
+            # 502/503/504 are transient gateway/proxy failures -> retryable.
+            if exc.code in _RETRYABLE_ROOM_HTTP_STATUS:
+                raise RoomTransportError(f"room HTTP {exc.code}: {body}") from exc
             raise RuntimeError(f"room HTTP {exc.code}: {body}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"could not reach room: {exc.reason}") from exc
+        except (
+            urllib.error.URLError,
+            http.client.HTTPException,
+            ConnectionError,
+            TimeoutError,
+        ) as exc:
+            # Connection reset/refused/dropped or a socket timeout: the room may
+            # never have run, so a fresh-nonce retry is safe.
+            reason = getattr(exc, "reason", exc)
+            raise RoomTransportError(f"could not reach room: {reason}") from exc
         if (
             "report" not in data
             or "quote" not in data
@@ -343,6 +396,28 @@ class HttpRoomLauncher:
             bundle_sha256=data["bundle_sha256"],
             provenance=data["provenance"],
         )
+
+
+def resolve_room_max_attempts() -> int:
+    """How many times to attempt one room run before giving up (1..5, default 3)."""
+
+    raw = os.environ.get(ROOM_MAX_ATTEMPTS_ENV, "3").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 3
+    return value if 1 <= value <= 5 else 3
+
+
+def _room_retry_backoff_seconds(attempt: int) -> float:
+    """Exponential backoff with jitter before retrying a transient room failure."""
+
+    try:
+        base = float(os.environ.get(ROOM_RETRY_BASE_SECONDS_ENV, "2") or "2")
+    except ValueError:
+        base = 2.0
+    delay = min(15.0, max(0.0, base) * (2 ** (attempt - 1)))
+    return delay + random.uniform(0.0, delay * 0.25)
 
 
 def resolve_room_http_timeout_seconds() -> float:

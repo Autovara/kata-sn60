@@ -1107,7 +1107,7 @@ def build_tee_room_execution_hook(source: Sn60SandboxSource) -> Sn60ExecutionHoo
             agent_ref=context.bundle_root,
             project_key=context.project_key,
             sealed_key_ref=sealed_key,
-            nonce=os.urandom(20),
+            mint_nonce=lambda: os.urandom(20),
             bundle_sha256=hash_bundle_root(Path(context.bundle_root)),
             policy=policy,
             launcher=launcher,

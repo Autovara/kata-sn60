@@ -19,6 +19,7 @@ from kata_sn60.execution.tee_room import (
     HttpRoomLauncher,
     RoomPolicy,
     RoomResult,
+    RoomTransportError,
     VerifiedQuote,
     _bundle_tar_b64,
     canonical,
@@ -154,7 +155,7 @@ def _eval(**over):
         agent_ref="b",
         project_key=PROJECT,
         sealed_key_ref="blob",
-        nonce=NONCE,
+        mint_nonce=lambda: NONCE,
         bundle_sha256=BUNDLE_SHA256,
         policy=POLICY,
         launcher=_Launcher(),
@@ -184,6 +185,56 @@ def test_unapproved_image_rejected():
 def test_room_failure_handled():
     o = _eval(launcher=_Launcher(boom=True))
     assert not o.accepted and "failed" in o.reason
+
+
+class _FlakyLauncher:
+    """Fails the first `fail_times` attempts with `exc`, then returns a good run."""
+
+    def __init__(self, fail_times, exc=None):
+        self.fail_times = fail_times
+        self.exc = exc if exc is not None else RoomTransportError("connection reset")
+        self.calls = 0
+        self.nonces = []
+
+    def launch_and_run(self, **kw):
+        self.calls += 1
+        self.nonces.append(kw["nonce"])
+        if self.calls <= self.fail_times:
+            raise self.exc
+        return RoomResult(
+            report=REPORT, quote_hex="q", bundle_sha256=BUNDLE_SHA256, provenance=PROVENANCE
+        )
+
+
+def test_transient_transport_failure_is_retried_then_succeeds():
+    launcher = _FlakyLauncher(fail_times=1)
+    o = _eval(launcher=launcher, max_attempts=3)
+    assert o.accepted and o.report == REPORT
+    assert launcher.calls == 2  # first attempt dropped, second succeeded
+
+
+def test_transport_retry_mints_a_fresh_nonce_each_attempt():
+    launcher = _FlakyLauncher(fail_times=1)
+    nonces = iter([b"nonce-0", NONCE])
+    o = _eval(launcher=launcher, mint_nonce=lambda: next(nonces), max_attempts=3)
+    assert o.accepted
+    # A new nonce is minted per attempt -- the room's replay guard would 409 a reuse.
+    assert launcher.nonces == [b"nonce-0", NONCE]
+
+
+def test_transport_failure_gives_up_after_max_attempts():
+    launcher = _FlakyLauncher(fail_times=99)
+    o = _eval(launcher=launcher, max_attempts=2)
+    assert not o.accepted
+    assert "unreachable after 2" in o.reason
+    assert launcher.calls == 2
+
+
+def test_non_transport_failure_is_not_retried():
+    launcher = _FlakyLauncher(fail_times=99, exc=RuntimeError("agent produced no report"))
+    o = _eval(launcher=launcher, max_attempts=3)
+    assert not o.accepted and "room run failed" in o.reason
+    assert launcher.calls == 1  # a real fault is returned immediately, never retried
 
 
 def test_replay_rejected():
