@@ -279,6 +279,46 @@ def test_run_sn60_plugin_round_no_winner_when_king_unbeaten(tmp_path: Path) -> N
     assert result.entries[0].beats_king is False
 
 
+def test_run_sn60_plugin_round_always_writes_candidate_summary_for_loser(
+    tmp_path: Path,
+) -> None:
+    # Continuous mode: even when the candidate loses this challenge's fresh king, its
+    # challenge summary must be written so the caller can still promote it off the
+    # king's running average. winner_submission_id/promotion_ready stay unchanged.
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = _write_benchmark(sandbox_root)
+    king_root = tmp_path / "king"
+    _write_detection_bundle(king_root, 0.9)  # tp = 4, unbeaten this challenge
+    weak = tmp_path / "weak"
+    _write_detection_bundle(weak, 0.1)  # tp = 0
+    execute, evaluate = _detection_hooks()
+
+    result = run_sn60_plugin_round(
+        king_artifact_path=str(king_root),
+        candidates=[("weak", str(weak))],
+        config={
+            "sandbox_root": str(sandbox_root),
+            "benchmark_file": str(benchmark_path),
+            "sandbox_commit": "commit-continuous",
+            "project_keys": ["project-alpha"],
+            "replicas_per_project": 1,
+            "always_write_candidate_summary": True,
+        },
+        output_root=str(tmp_path / "generic"),
+        plugin=Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate),
+    )
+
+    # The engine still reports no fresh-duel winner ...
+    assert result.winner_submission_id is None
+    assert result.promotion_ready is False
+    assert result.entries[0].beats_king is False
+    # ... but the loser's challenge summary was written and is loadable.
+    assert result.winner_challenge_summary_path is not None
+    summary_path = Path(result.winner_challenge_summary_path)
+    assert summary_path.exists()
+    assert summary_path.parent.name == "weak"  # the candidate's own run root
+
+
 @pytest.mark.parametrize("submission_id", ["../escape", "nested/id", ".", " candidate"])
 def test_run_sn60_plugin_round_rejects_unsafe_submission_id(
     tmp_path: Path, submission_id: str

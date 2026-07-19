@@ -46,24 +46,39 @@ from .progress import Sn60RoundProgress
 from .round_inputs import validate_round_candidates
 
 
-def _winner_duel_summary(
-    outcome: RoundOutcome, *, run_id: str, output_root: str
-) -> Sn60DuelSummary:
-    """A single-duel summary (king vs winner) for the winner's challenge summary."""
+def _duel_challenge_summary_for(
+    outcome: RoundOutcome,
+    plugin: Sn60BitsecPlugin,
+    variant: ScoredVariant,
+    *,
+    run_id: str,
+    output_root: str,
+    screening_payloads: dict[str, dict],
+) -> str:
+    """Write the king-vs-``variant`` duel + challenge summary and return its path."""
     problems: Sn60Problems = outcome.problems
-    winner = outcome.winner
-    winner_root = Path(output_root) / winner.label
-    return Sn60DuelSummary(
+    variant_root = Path(output_root) / variant.label
+    duel = Sn60DuelSummary(
         schema_version=DEFAULT_SN60_ROUND_SCHEMA_VERSION,
-        run_id=f"{run_id}-{winner.label}",
+        run_id=f"{run_id}-{variant.label}",
         created_at=datetime.now(UTC).isoformat(),
-        output_root=str(winner_root),
+        output_root=str(variant_root),
         project_keys=list(problems.project_keys),
         replicas_per_project=problems.replicas_per_project,
         sandbox_source=problems.sandbox_source,
         king=outcome.king.card.payload,
-        candidate=winner.card.payload,
+        candidate=variant.card.payload,
     )
+    variant_root.mkdir(parents=True, exist_ok=True)
+    write_sn60_duel_summary(variant_root / "duel_summary.json", duel)
+    summary = sn60_duel_to_challenge_summary(
+        duel,
+        lane_id=plugin.pack,
+        screening_result=screening_payloads.get(variant.label),
+    )
+    summary_path = variant_root / "challenge_summary.json"
+    write_challenge_summary(summary_path, summary)
+    return str(summary_path)
 
 
 def build_sn60_round_result(
@@ -80,12 +95,19 @@ def build_sn60_round_result(
     king_skipped_reason: str | None = None,
     king_artifact_path: str | None = None,
     king_artifact_hash: str | None = None,
+    always_write_candidate_summary: bool = False,
 ) -> Sn60RoundResult:
     """Reconstruct the SN60 round result from a generic outcome and write it.
 
     ``screened_out`` are candidates that failed the execution screener (never scored);
     they are merged in and ranked with the scored candidates, exactly like the legacy
     path.
+
+    ``always_write_candidate_summary`` (continuous mode) forces the top scored
+    candidate's challenge summary to be written even when it did not beat this
+    challenge's fresh king -- the promotion decision is then made by the caller from
+    the king's running average, so a candidate that clears that average must still
+    have a publishable challenge summary regardless of this single duel's outcome.
     """
     screened_out = screened_out or []
     screening_payloads = screening_payloads or {}
@@ -135,18 +157,31 @@ def build_sn60_round_result(
             reason=resolved_reason,
         )
     elif outcome.winner is not None and outcome.king is not None:
-        duel = _winner_duel_summary(outcome, run_id=run_id, output_root=output_root)
-        duel_root = Path(duel.output_root)
-        duel_root.mkdir(parents=True, exist_ok=True)
-        write_sn60_duel_summary(duel_root / "duel_summary.json", duel)
-        summary = sn60_duel_to_challenge_summary(
-            duel,
-            lane_id=plugin.pack,
-            screening_result=screening_payloads.get(outcome.winner.label),
+        winner_challenge_summary_path = _duel_challenge_summary_for(
+            outcome,
+            plugin,
+            outcome.winner,
+            run_id=run_id,
+            output_root=output_root,
+            screening_payloads=screening_payloads,
         )
-        summary_path = duel_root / "challenge_summary.json"
-        write_challenge_summary(summary_path, summary)
-        winner_challenge_summary_path = str(summary_path)
+    elif (
+        always_write_candidate_summary
+        and not candidate_only
+        and outcome.king is not None
+        and outcome.ranked
+    ):
+        # Continuous mode with no fresh-duel winner: still publish the top scored
+        # candidate's challenge summary so the caller's running-average rule can
+        # promote it if it clears the king's average by the margin.
+        winner_challenge_summary_path = _duel_challenge_summary_for(
+            outcome,
+            plugin,
+            outcome.ranked[0],
+            run_id=run_id,
+            output_root=output_root,
+            screening_payloads=screening_payloads,
+        )
 
     if candidate_only:
         promotion_reason = (
@@ -257,6 +292,7 @@ def run_sn60_plugin_round(
     """
     candidates = validate_round_candidates(candidates)
     plugin = plugin or Sn60BitsecPlugin()
+    always_write_candidate_summary = bool(config.get("always_write_candidate_summary"))
     run_id = run_id or build_sn60_round_id()
     round_root = Path(output_root).expanduser().resolve() / run_id
     round_root.mkdir(parents=True, exist_ok=False)
@@ -364,4 +400,5 @@ def run_sn60_plugin_round(
         king_skipped_reason=king_skipped_reason,
         king_artifact_path=str(Path(king_artifact_path).expanduser().resolve()),
         king_artifact_hash=hash_bundle_root(Path(king_artifact_path).expanduser().resolve()),
+        always_write_candidate_summary=always_write_candidate_summary,
     )
