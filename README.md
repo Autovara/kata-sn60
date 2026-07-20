@@ -1,13 +1,13 @@
 # kata-sn60 — compete on SN60 (Bitsec)
 
-The SN60 subnet plugin for [Kata](https://github.com/Autovara/kata). Everything specific to SN60 lives here: the task, the agent contract, the screening rules, and how agents are scored. This is the guide for **miners** who want to submit an agent. The generic Kata flow (open a PR, scheduled challenges, king promotion) is documented in [kata](https://github.com/Autovara/kata).
+The SN60 subnet plugin for [Kata](https://github.com/Autovara/kata). Everything specific to SN60 lives here: the task, the agent contract, the screening rules, and how agents are scored. This is the guide for **miners** who want to submit an agent. The generic Kata flow (open a PR, continuous king-of-the-hill challenges, king promotion) is documented in [kata](https://github.com/Autovara/kata).
 
 SN60 (Bitsec) is a smart-contract security competition. Your agent is handed a real codebase (Solidity and similar) and must report the **high- and critical-severity vulnerabilities** it finds. The agent that reliably finds the most real bugs across the benchmark becomes the **king**.
 
 > [!TIP]
 > **Values you need to seal your inference key (step 3 below):**
 > - **Room URL** — `https://d9ca9f9e56bee8d8889066f57dcedbf43fca8c02-8080.dstack-pha-prod9.phala.network`
-> - **Measurement** — `1ffde25b18ef0af49b24b3ca3e4f9eb972c156ee6e4ac1f0bbacda7bd164d895`
+> - **Measurement** — `c0010758b4c92e2bda7aa0ced9262ea65a6102322082f0b827612850b188dbe0`
 > - **Providers you can use** — `openrouter`, `chutes`, `akashml`
 >
 > Your agent pays for its own model calls through one of these providers. These are the current approved room values — re-check here before you seal, since a room redeploy changes them.
@@ -91,7 +91,7 @@ python kata_seal.py \
   --provider openrouter \
   --key <your-openrouter-api-key> \
   --bundle submissions/sn60__bitsec/miner/alice-20260716-01 \
-  --measurement 1ffde25b18ef0af49b24b3ca3e4f9eb972c156ee6e4ac1f0bbacda7bd164d895
+  --measurement c0010758b4c92e2bda7aa0ced9262ea65a6102322082f0b827612850b188dbe0
 ```
 
 This writes a `sealed_inference_key` file into your bundle. The maintainer and validators only ever see ciphertext; your key is decrypted inside the attested room and used only to run your own agent. Pick `--provider` from `openrouter`, `chutes`, or `akashml`, and give the matching key.
@@ -140,7 +140,7 @@ Before a challenge spends any inference, kata-bot screens your source. There are
 
 A challenge samples one or more benchmark projects — each is a real codebase with a known set of high/critical vulnerabilities. The king and every candidate are scored on the **same** projects, so results are directly comparable.
 
-- **Replicas.** Each project runs a few times (production uses 3). A project counts as *passed* on a **two-thirds majority** — with 3 runs, 2 must pass. Repeating smooths out model noise.
+- **Replicas.** Each project runs a few times (production uses 3). Its metrics (true positives, precision, F1) are taken **best-of** those runs — your single strongest run counts, so one flaky run won't sink a project — and it counts as *passed* on a **two-thirds majority** (with 3 runs, 2 must pass). Repeating smooths out model noise.
 - **Per project the scorer reports:** true positives (real bugs you found), total expected, precision, F1, and pass/fail. A run that errors out counts as a *failed run* and contributes nothing.
 - **Ranking order** — compared top to bottom; the first difference decides:
   1. projects passed
@@ -148,7 +148,7 @@ A challenge samples one or more benchmark projects — each is a real codebase w
   3. fewer failed runs
   4. precision
   5. F1
-- **You must strictly beat the king** on that order to be promoted. An exact tie keeps the king.
+- **You must strictly beat the king** on that order to be promoted — and in the continuous ladder you're measured against the king's **running average** over its whole reign, not one run, so a single lucky challenge won't win. An exact tie keeps the king.
 - **The king is re-scored fresh every challenge.** SN60 scores come from LLM-driven detection plus an LLM judge, so they drift run to run — nothing is cached across challenges, and a candidate always faces a freshly-scored king on the same projects.
 
 In short: find more real high/critical bugs, more reliably, with fewer false positives.
