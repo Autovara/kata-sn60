@@ -1121,11 +1121,10 @@ def test_promote_records_published_king_hash_for_non_normalized_agent(
 ) -> None:
     from kata_sn60.sn60_bitsec import hash_bundle_root
 
-    # An agent.py WITHOUT a trailing newline: publishing normalizes it
-    # (write_bundle_files appends "\n"), so the published king bytes differ
-    # from the submitted bytes. The recorded king hash must match the PUBLISHED
-    # bundle (what future duels hash), or every later duel sees
-    # king_is_current=False -> a permanent rerun-stale livelock.
+    # An agent.py WITHOUT a trailing newline, published byte-for-byte
+    # (stage_submission_bundle preserves the exact submitted bytes). The recorded
+    # king hash must match the PUBLISHED bundle (what future duels hash), or every
+    # later duel sees king_is_current=False -> a permanent rerun-stale livelock.
     non_normalized = (
         "def agent_main(project_dir=None, inference_api=None):\n"
         "    source_hint = str(project_dir or '')\n"
