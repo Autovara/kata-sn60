@@ -29,8 +29,6 @@ from kata_sn60.validator_system.challenge import (
     build_sn60_round_id,
     failed_candidate_variant_summary,
     run_optional_sn60_screener_project,
-    skipped_king_variant_summary,
-    sn60_candidate_only_to_challenge_summary,
     sn60_duel_to_challenge_summary,
     sn60_variant_rank,
     write_challenge_summary,
@@ -87,14 +85,10 @@ def build_sn60_round_result(
     *,
     run_id: str,
     output_root: str,
-    candidate_only: bool = False,
     screened_out: list[ScoredVariant] | None = None,
     screening_payloads: dict[str, dict] | None = None,
     screener_run_ids: dict[str, str] | None = None,
     screened_labels: frozenset[str] = frozenset(),
-    king_skipped_reason: str | None = None,
-    king_artifact_path: str | None = None,
-    king_artifact_hash: str | None = None,
     always_write_candidate_summary: bool = False,
 ) -> Sn60RoundResult:
     """Reconstruct the SN60 round result from a generic outcome and write it.
@@ -122,9 +116,9 @@ def build_sn60_round_result(
     entries = []
     for variant in all_variants:
         if variant.label in screened_labels:
-            beats_king = None if candidate_only else False
+            beats_king = False
         else:
-            beats_king = None if candidate_only else plugin.beats_king(variant.card, king_card)
+            beats_king = plugin.beats_king(variant.card, king_card)
         entries.append(
             Sn60RoundEntry(
                 submission_id=variant.label,
@@ -140,23 +134,8 @@ def build_sn60_round_result(
             )
         )
 
-    resolved_reason = (
-        king_skipped_reason
-        or "Candidate-only recovery mode was enabled by the maintainer; "
-        "the current king was not evaluated."
-    )
     winner_challenge_summary_path: str | None = None
-    if outcome.winner is not None and candidate_only:
-        winner_challenge_summary_path = _write_candidate_only_winner_summary(
-            outcome,
-            plugin,
-            run_id=run_id,
-            output_root=output_root,
-            king_artifact_path=king_artifact_path or "",
-            king_artifact_hash=king_artifact_hash or "",
-            reason=resolved_reason,
-        )
-    elif outcome.winner is not None and outcome.king is not None:
+    if outcome.winner is not None and outcome.king is not None:
         winner_challenge_summary_path = _duel_challenge_summary_for(
             outcome,
             plugin,
@@ -167,7 +146,6 @@ def build_sn60_round_result(
         )
     elif (
         always_write_candidate_summary
-        and not candidate_only
         and outcome.king is not None
         and outcome.ranked
     ):
@@ -183,22 +161,11 @@ def build_sn60_round_result(
             screening_payloads=screening_payloads,
         )
 
-    if candidate_only:
-        promotion_reason = (
-            f"{outcome.winner.label} won candidate-only recovery mode; the current "
-            "SN60 king was not evaluated"
-            if outcome.winner is not None
-            else (
-                "No candidate found a true-positive vulnerability in candidate-only "
-                "recovery mode, so no new king was promoted."
-            )
-        )
-    else:
-        promotion_reason = (
-            f"{outcome.winner.label} beat the current SN60 king"
-            if outcome.winner is not None
-            else "no candidate beat the current SN60 king"
-        )
+    promotion_reason = (
+        f"{outcome.winner.label} beat the current SN60 king"
+        if outcome.winner is not None
+        else "no candidate beat the current SN60 king"
+    )
 
     result = Sn60RoundResult(
         schema_version=DEFAULT_SN60_ROUND_SCHEMA_VERSION,
@@ -214,62 +181,10 @@ def build_sn60_round_result(
         promotion_ready=outcome.winner is not None,
         promotion_reason=promotion_reason,
         winner_challenge_summary_path=winner_challenge_summary_path,
-        competition_mode="candidate_only" if candidate_only else "king_duel",
-        king_skipped_reason=resolved_reason if candidate_only else None,
+        competition_mode="king_duel",
     )
     write_sn60_round_summary(Path(output_root) / "round_summary.json", result)
     return result
-
-
-def _write_candidate_only_winner_summary(
-    outcome: RoundOutcome,
-    plugin: Sn60BitsecPlugin,
-    *,
-    run_id: str,
-    output_root: str,
-    king_artifact_path: str,
-    king_artifact_hash: str,
-    reason: str,
-) -> str:
-    """Write the candidate-only winner's challenge summary (king is skipped)."""
-    problems: Sn60Problems = outcome.problems
-    winner = outcome.winner
-    winner_root = Path(output_root) / winner.label
-    winner_root.mkdir(parents=True, exist_ok=True)
-
-    # The "duel" here pairs the winner against a skipped (unscored) king so the
-    # challenge summary's run_summary_path resolves to a well-formed duel summary.
-    duel = Sn60DuelSummary(
-        schema_version=DEFAULT_SN60_ROUND_SCHEMA_VERSION,
-        run_id=f"{run_id}-{winner.label}",
-        created_at=datetime.now(UTC).isoformat(),
-        output_root=str(winner_root),
-        project_keys=list(problems.project_keys),
-        replicas_per_project=problems.replicas_per_project,
-        sandbox_source=problems.sandbox_source,
-        king=skipped_king_variant_summary(
-            king_artifact_path=king_artifact_path,
-            king_artifact_hash=king_artifact_hash,
-        ),
-        candidate=winner.card.payload,
-    )
-    candidate_summary_path = winner_root / "candidate_summary.json"
-    write_sn60_duel_summary(candidate_summary_path, duel)
-
-    summary = sn60_candidate_only_to_challenge_summary(
-        candidate=winner.card.payload,
-        candidate_summary_path=candidate_summary_path,
-        king_artifact_path=king_artifact_path,
-        king_artifact_hash=king_artifact_hash,
-        sandbox_source=problems.sandbox_source,
-        project_keys=list(problems.project_keys),
-        replicas_per_project=problems.replicas_per_project,
-        lane_id=plugin.pack,
-        reason=reason,
-    )
-    summary_path = winner_root / "candidate_only_challenge_summary.json"
-    write_challenge_summary(summary_path, summary)
-    return str(summary_path)
 
 
 def run_sn60_plugin_round(
@@ -279,10 +194,8 @@ def run_sn60_plugin_round(
     config: dict,
     output_root: str,
     run_id: str | None = None,
-    score_king: bool = True,
     plugin: Sn60BitsecPlugin | None = None,
     progress_path: str | None = None,
-    king_skipped_reason: str | None = None,
 ) -> Sn60RoundResult:
     """Run a full SN60 round through the generic orchestrator and build its result.
 
@@ -309,7 +222,6 @@ def run_sn60_plugin_round(
             candidate_labels=[label for label, _ in candidates],
             per_variant_total=len(problems.project_keys) * problems.replicas_per_project,
             progress_path=progress_path,
-            candidate_only=not score_king,
         )
         if progress_path
         else None
@@ -369,7 +281,7 @@ def run_sn60_plugin_round(
 
     # Lazy king: only score the king when a candidate qualified, so a round where
     # everyone is screened out never runs (or reports) the king.
-    score_king_effective = score_king and bool(qualified)
+    score_king_effective = bool(qualified)
     scoring_problems = replace(problems, screened_execution_payloads=screened_execution_payloads)
 
     outcome = run_plugin_round(
@@ -392,13 +304,9 @@ def run_sn60_plugin_round(
         plugin,
         run_id=run_id,
         output_root=str(round_root),
-        candidate_only=not score_king,
         screened_out=screened_out,
         screening_payloads=screening_payloads,
         screener_run_ids=screener_run_ids,
         screened_labels=frozenset(screened_labels),
-        king_skipped_reason=king_skipped_reason,
-        king_artifact_path=str(Path(king_artifact_path).expanduser().resolve()),
-        king_artifact_hash=hash_bundle_root(Path(king_artifact_path).expanduser().resolve()),
         always_write_candidate_summary=always_write_candidate_summary,
     )

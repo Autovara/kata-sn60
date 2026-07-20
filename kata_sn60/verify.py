@@ -9,8 +9,6 @@ from __future__ import annotations
 from kata.provenance import short_hash
 from kata.state.lanes import benchmark_snapshot_path, load_benchmark_snapshot
 
-from kata_sn60.promotion import load_sn60_duel_summary
-
 
 def sn60_benchmark_is_current(*, lane_id, summary, public_root=None) -> bool:
     """Freshness against the lane's recorded benchmark snapshot version.
@@ -27,14 +25,3 @@ def sn60_benchmark_is_current(*, lane_id, summary, public_root=None) -> bool:
     return summary.evaluator_version == expected_version
 
 
-def sn60_extra_verification_reasons(*, lane_id, summary, public_root=None) -> list[str]:
-    """SN60-specific reject reasons: candidate-only recovery needs a true positive."""
-    reasons: list[str] = []
-    if summary.primary.competition_mode == "candidate_only":
-        duel_summary = load_sn60_duel_summary(summary.primary.run_summary_path)
-        if duel_summary.candidate.true_positives <= 0:
-            reasons.append(
-                "Candidate-only recovery promotion requires at least one true-positive "
-                "vulnerability."
-            )
-    return reasons

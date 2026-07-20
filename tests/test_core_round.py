@@ -15,9 +15,6 @@ from pathlib import Path
 from kata.core.round import run_plugin_round
 from kata.plugins.contract import EnvSpec, ScoreCard, ScoringProfile, SubnetPlugin
 
-from kata_sn60 import Sn60BitsecPlugin
-from kata_sn60.validator_system import run_sn60_round
-
 
 class _NumPlugin(SubnetPlugin):
     """Stub: the agent_path is a string float that is its own score."""
@@ -92,7 +89,8 @@ def test_plugin_run_round_default_delegates_to_orchestrator() -> None:
     assert outcome.winner is not None and outcome.winner.label == "b"
 
 
-def test_orchestrator_candidate_only_skips_king() -> None:
+def test_orchestrator_skips_king_when_score_king_false() -> None:
+    # Lazy king: score_king=False (no candidate qualified for scoring) skips the king.
     outcome = run_plugin_round(
         _NumPlugin(),
         king_agent_path="0.9",  # ignored because score_king=False
@@ -163,66 +161,3 @@ def _detection_hooks():
         }
 
     return execute, evaluate
-
-
-def test_sn60_orchestrator_matches_run_sn60_round(tmp_path: Path) -> None:
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = _write_benchmark(sandbox_root)
-    king_root = tmp_path / "king"
-    _write_detection_bundle(king_root, 0.25)
-    candidate_specs = [("cand-a", 0.0), ("cand-b", 0.5), ("cand-c", 0.75)]
-    candidate_paths = {}
-    for name, detection in candidate_specs:
-        path = tmp_path / name
-        _write_detection_bundle(path, detection)
-        candidate_paths[name] = str(path)
-
-    execute, evaluate = _detection_hooks()
-
-    # Legacy path.
-    legacy = run_sn60_round(
-        king_artifact_path=str(king_root),
-        candidates=[(name, candidate_paths[name]) for name, _ in candidate_specs],
-        project_keys=["project-alpha"],
-        output_root=str(tmp_path / "legacy-runs"),
-        replicas_per_project=1,
-        sandbox_root=str(sandbox_root),
-        benchmark_file=str(benchmark_path),
-        sandbox_commit="commit-parity",
-        king_scoreboard_path=str(tmp_path / "king_scoreboard.json"),
-        execution_hook=execute,
-        evaluation_hook=evaluate,
-    )
-
-    # Generic orchestrator path, same inputs.
-    plugin = Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate)
-    outcome = run_plugin_round(
-        plugin,
-        king_agent_path=str(king_root),
-        candidates=[(name, candidate_paths[name]) for name, _ in candidate_specs],
-        config={
-            "sandbox_root": str(sandbox_root),
-            "benchmark_file": str(benchmark_path),
-            "sandbox_commit": "commit-parity",
-            "project_keys": ["project-alpha"],
-            "replicas_per_project": 1,
-        },
-        output_root=str(tmp_path / "generic-runs"),
-        seed="round-parity",
-    )
-
-    # Same winner.
-    assert outcome.winner is not None
-    assert outcome.winner.label == legacy.winner_submission_id == "cand-c"
-    # Same ranking order.
-    assert [v.label for v in outcome.ranked] == [e.submission_id for e in legacy.entries]
-    # Same per-candidate true positives (the signal that decides the ranking here).
-    legacy_tp = {e.submission_id: e.candidate.true_positives for e in legacy.entries}
-    generic_tp = {v.label: v.card.metrics["true_positives"] for v in outcome.ranked}
-    assert generic_tp == legacy_tp
-    # Same king score.
-    assert outcome.king is not None
-    assert outcome.king.card.metrics["true_positives"] == legacy.king.true_positives
-    # beats_king parity: exactly cand-c and cand-b beat the king.
-    beats = {v.label: plugin.beats_king(v.card, outcome.king.card) for v in outcome.ranked}
-    assert beats == {"cand-c": True, "cand-b": True, "cand-a": False}

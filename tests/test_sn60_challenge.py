@@ -10,7 +10,6 @@ from kata.state.lanes import (
     load_promotion_record,
 )
 
-from kata_sn60.promotion import load_sn60_duel_summary
 from kata_sn60.sn60_bitsec import (
     Sn60ProjectAggregate,
     Sn60ReplicaContext,
@@ -22,8 +21,41 @@ from kata_sn60.validator_system import (
     evaluate_sn60_promotion,
     load_challenge_summary,
     run_sn60_challenge,
-    run_sn60_round,
 )
+
+
+def _run_round(
+    *,
+    king_artifact_path,
+    candidates,
+    project_keys,
+    output_root=None,
+    replicas_per_project=1,
+    sandbox_root=None,
+    benchmark_file=None,
+    sandbox_commit=None,
+    execution_hook=None,
+    evaluation_hook=None,
+    progress_path=None,
+    **_ignored,
+):
+    """Score the king + candidates through the SN60 plugin round (the real path)."""
+    from kata_sn60 import Sn60BitsecPlugin, run_sn60_plugin_round
+
+    return run_sn60_plugin_round(
+        king_artifact_path=king_artifact_path,
+        candidates=candidates,
+        config={
+            "sandbox_root": sandbox_root,
+            "benchmark_file": benchmark_file,
+            "sandbox_commit": sandbox_commit,
+            "project_keys": project_keys,
+            "replicas_per_project": replicas_per_project,
+        },
+        output_root=output_root or "runs",
+        plugin=Sn60BitsecPlugin(execution_hook=execution_hook, evaluation_hook=evaluation_hook),
+        progress_path=progress_path,
+    )
 
 SCREENING_DESCRIPTION = (
     "A privileged state-changing function can be called by any account, "
@@ -168,147 +200,6 @@ def test_run_sn60_challenge_decides_winner_and_records_lane_provenance(
     assert snapshot.container_images == ["ghcr.io/bitsec-ai/project-alpha:latest"]
     assert snapshot.scorer_version == "ScaBenchScorerV2"
     assert (Path(summary.manifest_path).with_name("screening_result.json")).exists()
-
-
-def test_run_sn60_round_candidate_only_skips_king_and_selects_top_candidate(
-    tmp_path: Path,
-) -> None:
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = write_sandbox_source(sandbox_root)
-    king_root = tmp_path / "king"
-    weak_root = tmp_path / "weak"
-    strong_root = tmp_path / "strong"
-    write_bundle(king_root, "king")
-    write_bundle(weak_root, "weak")
-    write_bundle(strong_root, "strong")
-    executed_variants: list[str] = []
-
-    def execute(context: Sn60ReplicaContext) -> dict[str, object]:
-        executed_variants.append(context.variant_name)
-        assert context.variant_name != "king"
-        return {"success": True, "report": VALID_SCREENING_REPORT}
-
-    def evaluate(
-        context: Sn60ReplicaContext,
-        _report_payload: dict[str, object],
-    ) -> dict[str, object]:
-        source = Path(context.bundle_root, "agent.py").read_text(encoding="utf-8")
-        true_positives = 4 if "strong" in source else 2
-        detection_rate = true_positives / 4
-        return {
-            "status": "success",
-            "result": {
-                "project": context.project_key,
-                "timestamp": "2026-07-01T00:00:00+00:00",
-                "total_expected": 4,
-                "total_found": 4,
-                "true_positives": true_positives,
-                "false_negatives": 4 - true_positives,
-                "false_positives": 0,
-                "detection_rate": detection_rate,
-                "precision": 1.0,
-                "f1_score": detection_rate,
-                "result": "PASS" if true_positives == 4 else "FAIL",
-            },
-        }
-
-    result = run_sn60_round(
-        king_artifact_path=str(king_root),
-        candidates=[("weak", str(weak_root)), ("strong", str(strong_root))],
-        project_keys=["project-alpha"],
-        output_root=str(tmp_path / "runs"),
-        replicas_per_project=1,
-        sandbox_root=str(sandbox_root),
-        benchmark_file=str(benchmark_path),
-        sandbox_commit="sandbox-commit-1",
-        execution_hook=execute,
-        evaluation_hook=evaluate,
-        candidate_only=True,
-    )
-
-    assert executed_variants == ["candidate", "candidate"]
-    assert result.competition_mode == "candidate_only"
-    assert result.king is None
-    assert result.winner_submission_id == "strong"
-    assert result.entries[0].submission_id == "strong"
-    assert result.entries[0].selected_winner
-    assert result.entries[0].beats_king is None
-    assert result.winner_challenge_summary_path
-    summary = load_challenge_summary(result.winner_challenge_summary_path)
-    assert summary.promotion_ready
-    assert summary.primary.competition_mode == "candidate_only"
-    assert summary.primary.king_skipped is True
-    assert summary.primary.candidate_beats_king is False
-    duel_summary = load_sn60_duel_summary(summary.primary.run_summary_path)
-    assert duel_summary.king.variant_name == "king"
-    assert duel_summary.king.true_positives == 0
-    assert duel_summary.candidate.variant_name == "candidate"
-    assert duel_summary.candidate.true_positives == 4
-
-
-def test_run_sn60_round_candidate_only_has_no_winner_without_true_positives(
-    tmp_path: Path,
-) -> None:
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = write_sandbox_source(sandbox_root)
-    king_root = tmp_path / "king"
-    first_root = tmp_path / "first"
-    second_root = tmp_path / "second"
-    write_bundle(king_root, "king")
-    write_bundle(first_root, "first")
-    write_bundle(second_root, "second")
-
-    def execute(_context: Sn60ReplicaContext) -> dict[str, object]:
-        return {"success": True, "report": VALID_SCREENING_REPORT}
-
-    def evaluate(
-        context: Sn60ReplicaContext,
-        _report_payload: dict[str, object],
-    ) -> dict[str, object]:
-        return {
-            "status": "success",
-            "result": {
-                "project": context.project_key,
-                "timestamp": "2026-07-01T00:00:00+00:00",
-                "total_expected": 4,
-                "total_found": 2,
-                "true_positives": 0,
-                "false_negatives": 4,
-                "false_positives": 2,
-                "detection_rate": 0.0,
-                "precision": 0.0,
-                "f1_score": 0.0,
-                "result": "FAIL",
-            },
-        }
-
-    progress_path = tmp_path / "round-progress.json"
-    result = run_sn60_round(
-        king_artifact_path=str(king_root),
-        candidates=[("first", str(first_root)), ("second", str(second_root))],
-        project_keys=["project-alpha"],
-        output_root=str(tmp_path / "runs"),
-        replicas_per_project=1,
-        sandbox_root=str(sandbox_root),
-        benchmark_file=str(benchmark_path),
-        sandbox_commit="sandbox-commit-1",
-        execution_hook=execute,
-        evaluation_hook=evaluate,
-        candidate_only=True,
-        progress_path=str(progress_path),
-    )
-
-    assert result.competition_mode == "candidate_only"
-    assert result.winner_submission_id is None
-    assert result.promotion_ready is False
-    assert result.winner_challenge_summary_path is None
-    assert "No candidate found" in result.promotion_reason
-    assert all(not entry.selected_winner for entry in result.entries)
-    progress = json.loads(progress_path.read_text())
-    assert progress["state"] == "completed"
-    assert progress["winner_submission_id"] is None
-
-
 def test_run_sn60_challenge_screens_without_a_second_inference_pass(
     tmp_path: Path,
 ) -> None:
@@ -848,7 +739,7 @@ def test_run_sn60_round_ranks_candidates_and_picks_strict_winner(tmp_path: Path)
     progress_path = tmp_path / "round-progress.json"
 
     ran, execute, evaluate = _detection_hooks()
-    result = run_sn60_round(
+    result = _run_round(
         king_artifact_path=str(king_root),
         candidates=candidates,
         project_keys=["project-alpha"],
@@ -964,7 +855,7 @@ def test_run_sn60_round_optional_screener_skips_failed_candidate(
             },
         }
 
-    result = run_sn60_round(
+    result = _run_round(
         king_artifact_path=str(king_root),
         candidates=candidates,
         project_keys=["project-alpha"],
@@ -1017,7 +908,7 @@ def test_run_sn60_round_completes_when_every_candidate_fails_screener(
             return {"success": False, "error": "candidate failed smoke run"}
         return {"success": True, "report": {"vulnerabilities": [{"title": "v"}]}}
 
-    result = run_sn60_round(
+    result = _run_round(
         king_artifact_path=str(king_root),
         candidates=candidates,
         project_keys=["project-alpha"],
@@ -1057,7 +948,7 @@ def test_run_sn60_round_has_no_winner_when_none_beats_king(tmp_path: Path) -> No
         candidates.append((name, str(path)))
 
     _ran, execute, evaluate = _detection_hooks()
-    result = run_sn60_round(
+    result = _run_round(
         king_artifact_path=str(king_root),
         candidates=candidates,
         project_keys=["project-alpha"],
@@ -1086,7 +977,7 @@ def test_run_sn60_round_rejects_duplicate_submission_ids(tmp_path: Path) -> None
     _write_detection_bundle(candidate_root, 0.5)
 
     with pytest.raises(ValueError, match="Duplicate submission id"):
-        run_sn60_round(
+        _run_round(
             king_artifact_path=str(king_root),
             candidates=[("dup", str(candidate_root)), ("dup", str(candidate_root))],
             project_keys=["project-alpha"],

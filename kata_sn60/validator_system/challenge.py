@@ -23,7 +23,6 @@ from kata.state.lanes import (
 from kata.state.progress import update_live_status
 
 from kata_sn60.execution.policy import tee_execution_enabled
-from kata_sn60.round_inputs import validate_round_candidates
 from kata_sn60.sn60_bitsec import (
     DEFAULT_EVAL_MAX_VULNS,
     DEFAULT_REPLICAS_PER_PROJECT,
@@ -75,7 +74,6 @@ class ChallengePoolSummary:
     candidate_beats_king: bool
     candidate_score_delta: float
     competition_mode: str = "king_duel"
-    king_skipped: bool = False
 
 
 @dataclass(frozen=True)
@@ -95,17 +93,6 @@ class ChallengeSummary:
     primary: ChallengePoolSummary
     promotion_ready: bool
     promotion_reason: str
-
-    @property
-    def is_candidate_only(self) -> bool:
-        """True when the round skipped king evaluation (candidate-only recovery).
-
-        The maintainer opted out of king validation (``KATA_ROUND_CANDIDATE_ONLY``),
-        so the generic verifier skips the king- and benchmark-currency staleness
-        guards for this result and promotes the top candidate. SN60 still requires
-        at least one true positive via ``extra_verification_reasons``.
-        """
-        return self.primary.competition_mode == "candidate_only"
 
 
 @dataclass(frozen=True)
@@ -436,105 +423,6 @@ def sn60_duel_to_pool_summary(
     )
 
 
-def sn60_candidate_only_to_challenge_summary(
-    *,
-    candidate: Sn60VariantSummary,
-    candidate_summary_path: Path,
-    king_artifact_path: str,
-    king_artifact_hash: str,
-    sandbox_source: Sn60SandboxSource,
-    project_keys: list[str],
-    replicas_per_project: int,
-    lane_id: str,
-    reason: str,
-) -> ChallengeSummary:
-    candidate_score = round(sn60_pass_score(candidate) * 100, 2)
-    candidate_detection = round(candidate.aggregated_score * 100, 2)
-    fingerprint_payload = {
-        "competition_mode": "candidate_only",
-        "king_artifact_hash": king_artifact_hash,
-        "candidate_artifact_hash": candidate.artifact_hash,
-        "project_keys": list(project_keys),
-        "replicas_per_project": replicas_per_project,
-        "sandbox_commit": sandbox_source.sandbox_commit,
-        "benchmark_sha256": sandbox_source.benchmark_sha256,
-        "scorer_version": sandbox_source.scorer_version,
-    }
-    fingerprint = sha256(
-        json.dumps(fingerprint_payload, sort_keys=True).encode("utf-8")
-    ).hexdigest()
-    return ChallengeSummary(
-        schema_version=CHALLENGE_SUMMARY_SCHEMA_VERSION,
-        run_id=f"candidate-only-{short_hash(candidate.artifact_hash)}",
-        manifest_path=str(candidate_summary_path),
-        mode=SN60_MINER_MODE,
-        evaluator_version=(
-            f"{sandbox_source.scorer_version}@{short_hash(sandbox_source.sandbox_commit)}"
-        ),
-        validator_model=SN60_VALIDATOR_MODEL,
-        king_artifact=king_artifact_path,
-        candidate_artifact=candidate.artifact_path,
-        king_artifact_hash=king_artifact_hash,
-        candidate_artifact_hash=candidate.artifact_hash,
-        primary_pool_fingerprint=fingerprint,
-        created_at=datetime.now(UTC).isoformat(),
-        primary=ChallengePoolSummary(
-            project_keys=list(project_keys),
-            run_summary_path=str(candidate_summary_path),
-            total_task_weight=float(len(project_keys)),
-            variant_successes={
-                "king": 0,
-                "candidate": candidate.codebase_pass_count,
-            },
-            variant_invalid_runs={
-                "king": 0,
-                "candidate": candidate.invalid_runs,
-            },
-            variant_scores={
-                "king": 0.0,
-                "candidate": candidate_score,
-            },
-            variant_detection_scores={
-                "king": 0.0,
-                "candidate": candidate_detection,
-            },
-            candidate_beats_king=False,
-            candidate_score_delta=0.0,
-            competition_mode="candidate_only",
-            king_skipped=True,
-        ),
-        promotion_ready=True,
-        promotion_reason=(
-            f"{lane_id}: candidate-only recovery mode selected this candidate; {reason}"
-        ),
-    )
-
-
-def skipped_king_variant_summary(
-    *,
-    king_artifact_path: str,
-    king_artifact_hash: str,
-) -> Sn60VariantSummary:
-    return Sn60VariantSummary(
-        variant_name="king",
-        artifact_path=king_artifact_path,
-        artifact_hash=king_artifact_hash,
-        successful_runs=0,
-        invalid_runs=0,
-        pass_count=0,
-        codebase_pass_count=0,
-        aggregated_score=0.0,
-        average_detection_rate=0.0,
-        true_positives=0,
-        total_expected=0,
-        total_found=0,
-        precision=0.0,
-        f1_score=0.0,
-        project_summaries=[],
-        replica_results=[],
-    )
-
-
 def failed_candidate_variant_summary(
     *,
     candidate_artifact_path: str,
@@ -731,7 +619,6 @@ class Sn60RoundResult:
     promotion_reason: str
     winner_challenge_summary_path: str | None = None
     competition_mode: str = "king_duel"
-    king_skipped_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -866,117 +753,6 @@ def _apply_running_metrics(
     target["projects"] = list(acc["projects"])
 
 
-def run_sn60_round(
-    *,
-    king_artifact_path: str,
-    candidates: list[tuple[str, str]],
-    project_keys: list[str],
-    output_root: str | None = None,
-    replicas_per_project: int = DEFAULT_REPLICAS_PER_PROJECT,
-    sandbox_root: str | None = None,
-    benchmark_file: str | None = None,
-    sandbox_commit: str | None = None,
-    king_scoreboard_path: str | None = None,
-    screening_result: dict[str, object] | None = None,
-    execution_hook: Sn60ExecutionHook | None = None,
-    evaluation_hook: Sn60EvaluationHook | None = None,
-    progress_path: str | None = None,
-    candidate_only: bool = False,
-    king_skipped_reason: str | None = None,
-) -> Sn60RoundResult:
-    """Score the king once (from cache) against every candidate on the same
-    projects, then rank the candidates and pick the strict winner.
-
-    Each candidate is scored by one cached duel: the king is served from the
-    shared scoreboard, so across the whole round it runs at most once per project
-    regardless of how many candidates compete. The winner is the highest-ranked
-    candidate that strictly beats the king; ties keep the king (no winner).
-    """
-    candidates = validate_round_candidates(candidates)
-    if candidate_only:
-        return run_sn60_candidate_only_round(
-            king_artifact_path=king_artifact_path,
-            candidates=candidates,
-            project_keys=project_keys,
-            output_root=output_root,
-            replicas_per_project=replicas_per_project,
-            sandbox_root=sandbox_root,
-            benchmark_file=benchmark_file,
-            sandbox_commit=sandbox_commit,
-            execution_hook=execution_hook,
-            evaluation_hook=evaluation_hook,
-            progress_path=progress_path,
-            king_skipped_reason=king_skipped_reason,
-        )
-
-    from kata_sn60.plugin import Sn60BitsecPlugin
-    from kata_sn60.round import run_sn60_plugin_round
-
-    # Routed through the generic orchestrator; SN60-specific scoring, the
-    # execution screener and live progress live in the SN60 plugin package.
-    plugin = Sn60BitsecPlugin(execution_hook=execution_hook, evaluation_hook=evaluation_hook)
-    return run_sn60_plugin_round(
-        king_artifact_path=king_artifact_path,
-        candidates=candidates,
-        config={
-            "sandbox_root": sandbox_root,
-            "benchmark_file": benchmark_file,
-            "sandbox_commit": sandbox_commit,
-            "project_keys": project_keys,
-            "replicas_per_project": replicas_per_project,
-        },
-        output_root=output_root or "runs",
-        plugin=plugin,
-        progress_path=progress_path,
-    )
-
-
-def run_sn60_candidate_only_round(
-    *,
-    king_artifact_path: str,
-    candidates: list[tuple[str, str]],
-    project_keys: list[str],
-    output_root: str | None = None,
-    replicas_per_project: int = DEFAULT_REPLICAS_PER_PROJECT,
-    sandbox_root: str | None = None,
-    benchmark_file: str | None = None,
-    sandbox_commit: str | None = None,
-    execution_hook: Sn60ExecutionHook | None = None,
-    evaluation_hook: Sn60EvaluationHook | None = None,
-    progress_path: str | None = None,
-    king_skipped_reason: str | None = None,
-) -> Sn60RoundResult:
-    """Score only candidates and promote the top-ranked entrant.
-
-    This is an explicit recovery mode for replacing a suspected bad king. The
-    current king is not executed; its artifact hash is recorded only so the
-    trusted promotion path can verify it is replacing the same king snapshot the
-    maintainer intentionally skipped.
-    """
-    if not project_keys:
-        raise ValueError("SN60 candidate-only round requires at least one project key.")
-    if replicas_per_project <= 0:
-        raise ValueError("SN60 candidate-only round replicas_per_project must be positive.")
-    from kata_sn60.plugin import Sn60BitsecPlugin
-    from kata_sn60.round import run_sn60_plugin_round
-
-    plugin = Sn60BitsecPlugin(execution_hook=execution_hook, evaluation_hook=evaluation_hook)
-    return run_sn60_plugin_round(
-        king_artifact_path=king_artifact_path,
-        candidates=candidates,
-        config={
-            "sandbox_root": sandbox_root,
-            "benchmark_file": benchmark_file,
-            "sandbox_commit": sandbox_commit,
-            "project_keys": project_keys,
-            "replicas_per_project": replicas_per_project,
-        },
-        output_root=output_root or "runs",
-        score_king=False,
-        plugin=plugin,
-        progress_path=progress_path,
-        king_skipped_reason=king_skipped_reason,
-    )
 
 
 def run_sn60_baseline_only(
@@ -1348,7 +1124,6 @@ def parse_challenge_pool(payload: dict[str, object]) -> ChallengePoolSummary:
             payload.get("candidate_score_delta", round(candidate_score - king_score, 2))
         ),
         competition_mode=str(payload.get("competition_mode") or "king_duel"),
-        king_skipped=bool(payload.get("king_skipped", False)),
     )
 
 
@@ -1373,9 +1148,6 @@ def render_pool(pool: ChallengePoolSummary) -> list[str]:
             )
     lines.append(f"- Candidate beats king: {'yes' if pool.candidate_beats_king else 'no'}")
     lines.append(f"- Candidate score delta: {pool.candidate_score_delta:+.2f}")
-    if pool.competition_mode == "candidate_only":
-        lines.append("- Competition mode: candidate-only recovery")
-        lines.append("- King evaluated: no")
     return lines
 
 

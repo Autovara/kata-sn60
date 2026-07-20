@@ -300,13 +300,6 @@ class Sn60BitsecPlugin(SubnetPlugin):
 
         return sn60_benchmark_is_current(lane_id=lane_id, summary=summary, public_root=public_root)
 
-    def extra_verification_reasons(self, *, lane_id, summary, public_root=None) -> list[str]:
-        from kata_sn60.verify import sn60_extra_verification_reasons
-
-        return sn60_extra_verification_reasons(
-            lane_id=lane_id, summary=summary, public_root=public_root
-        )
-
     def load_challenge_summary(self, path):
         from kata_sn60.validator_system import load_challenge_summary
 
@@ -369,7 +362,6 @@ class Sn60BitsecPlugin(SubnetPlugin):
         config,
         output_root,
         run_id=None,
-        score_king=True,
         progress_path=None,
     ):
         # Lazy import avoids the module-load cycle (round.py imports this module).
@@ -381,7 +373,6 @@ class Sn60BitsecPlugin(SubnetPlugin):
             config=config,
             output_root=output_root,
             run_id=run_id,
-            score_king=score_king,
             plugin=self,
             progress_path=progress_path,
         )

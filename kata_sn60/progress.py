@@ -32,20 +32,18 @@ class Sn60RoundProgress:
         candidate_labels: list[str],
         per_variant_total: int,
         progress_path: str,
-        candidate_only: bool = False,
     ) -> None:
         self._path = progress_path
-        self._candidate_only = candidate_only
         self._progress: dict = {
             "schema_version": DEFAULT_SN60_ROUND_SCHEMA_VERSION,
             "state": "executing",
             "run_id": run_id,
-            "competition_mode": "candidate_only" if candidate_only else "king_duel",
+            "competition_mode": "king_duel",
             "project_keys": list(project_keys),
             "king": {
                 "done": 0,
-                "total": 0 if candidate_only else per_variant_total,
-                "state": "skipped" if candidate_only else "scoring",
+                "total": per_variant_total,
+                "state": "scoring",
             },
             "candidates": [
                 {
@@ -92,7 +90,7 @@ class Sn60RoundProgress:
         entry["done"] = 0
         entry["failure_reason"] = "candidate failed SN60 screener project"
         entry["screening_result"] = screening_result
-        entry["beats_king"] = None if self._candidate_only else False
+        entry["beats_king"] = False
         for key, value in snapshot.items():
             if key not in _STRUCTURAL_KEYS:
                 entry[key] = value

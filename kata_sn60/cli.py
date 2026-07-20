@@ -53,7 +53,6 @@ def sn60_round_result_json(result) -> dict:
         "promotion_ready": result.promotion_ready,
         "promotion_reason": result.promotion_reason,
         "competition_mode": result.competition_mode,
-        "king_skipped_reason": result.king_skipped_reason,
         "validator_replica_count": 1,
         "project_keys": list(getattr(result, "project_keys", [])),
         "replicas_per_project": result.replicas_per_project,
@@ -117,14 +116,7 @@ def sn60_variant_detail(variant) -> dict:
 
 def sn60_render_round_text(result) -> str:
     lines = [f"SN60 round {result.run_id}"]
-    competition_mode = result.competition_mode
-    if competition_mode == "candidate_only":
-        lines.append("mode: candidate-only recovery")
-        lines.append("king evaluated: no")
-        king_skipped_reason = result.king_skipped_reason
-        if king_skipped_reason:
-            lines.append(f"reason: {king_skipped_reason}")
-    elif result.king is not None:
+    if result.king is not None:
         lines.append(
             f"king pass score {sn60_pass_score(result.king):.3f} "
             f"({result.king.codebase_pass_count}/{len(result.king.project_summaries)} projects, "

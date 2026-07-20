@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 
 from kata_sn60 import Sn60BitsecPlugin, run_sn60_plugin_round
-from kata_sn60.validator_system import run_sn60_round
 
 
 def _write_detection_bundle(root: Path, detection: float) -> None:
@@ -104,66 +103,6 @@ def _build_inputs(tmp_path: Path):
         _write_detection_bundle(path, detection)
         paths[name] = str(path)
     return sandbox_root, benchmark_path, king_root, specs, paths
-
-
-def test_run_sn60_plugin_round_matches_legacy_contract(tmp_path: Path) -> None:
-    sandbox_root, benchmark_path, king_root, specs, paths = _build_inputs(tmp_path)
-    execute, evaluate = _detection_hooks()
-    candidates = [(name, paths[name]) for name, _ in specs]
-
-    legacy = run_sn60_round(
-        king_artifact_path=str(king_root),
-        candidates=candidates,
-        project_keys=["project-alpha"],
-        output_root=str(tmp_path / "legacy"),
-        replicas_per_project=1,
-        sandbox_root=str(sandbox_root),
-        benchmark_file=str(benchmark_path),
-        sandbox_commit="commit-parity",
-        king_scoreboard_path=str(tmp_path / "sb.json"),
-        execution_hook=execute,
-        evaluation_hook=evaluate,
-    )
-
-    plugin = Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate)
-    result = run_sn60_plugin_round(
-        king_artifact_path=str(king_root),
-        candidates=candidates,
-        config={
-            "sandbox_root": str(sandbox_root),
-            "benchmark_file": str(benchmark_path),
-            "sandbox_commit": "commit-parity",
-            "project_keys": ["project-alpha"],
-            "replicas_per_project": 1,
-        },
-        output_root=str(tmp_path / "generic"),
-        plugin=plugin,
-    )
-
-    # Top-level contract.
-    assert result.winner_submission_id == legacy.winner_submission_id == "cand-c"
-    assert result.promotion_ready is legacy.promotion_ready is True
-    assert result.promotion_reason == legacy.promotion_reason
-    assert result.competition_mode == legacy.competition_mode == "king_duel"
-    assert result.project_keys == legacy.project_keys
-    assert _sandbox_contract(result.sandbox_source) == _sandbox_contract(legacy.sandbox_source)
-
-    # King summary contract.
-    assert _variant_contract(result.king) == _variant_contract(legacy.king)
-
-    # Per-entry contract, in the same ranked order.
-    assert [e.submission_id for e in result.entries] == [e.submission_id for e in legacy.entries]
-    for got, want in zip(result.entries, legacy.entries):
-        assert got.submission_id == want.submission_id
-        assert got.beats_king == want.beats_king
-        assert got.selected_winner == want.selected_winner
-        assert _variant_contract(got.candidate) == _variant_contract(want.candidate)
-
-    # The winner challenge summary was written and is loadable.
-    assert result.winner_challenge_summary_path is not None
-    assert Path(result.winner_challenge_summary_path).exists()
-    assert (Path(result.output_root) / "round_summary.json").exists()
-
 
 def test_run_sn60_plugin_round_writes_board_progress(tmp_path: Path) -> None:
     # The plugin round must write round-progress.json in the same shape the board
