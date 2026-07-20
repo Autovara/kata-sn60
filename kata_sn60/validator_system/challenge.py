@@ -20,7 +20,6 @@ from kata.state.lanes import (
     write_challenge_state,
     write_promotion_record,
 )
-from kata.state.progress import update_live_status
 
 from kata_sn60.execution.policy import tee_execution_enabled
 from kata_sn60.sn60_bitsec import (
@@ -37,18 +36,13 @@ from kata_sn60.sn60_bitsec import (
     build_default_execution_hook,
     hash_bundle_root,
     resolve_sn60_sandbox_source,
-    run_sn60_bitsec_duel,
     score_variant_on_projects,
     summarize_variant,
     validate_sn60_project_keys,
 )
 from kata_sn60.validator_system.screening import (
     Sn60ScreeningResult,
-    build_sn60_execution_note_result,
-    build_sn60_screening_id,
-    load_passed_screening_report,
     run_sn60_screening,
-    run_sn60_static_screening,
     screening_result_payload,
     sn60_screening_freshness_fingerprint,
     validate_sn60_screening_report,
@@ -136,215 +130,6 @@ def summarize_candidate_finding_quality(
         ],
     }
 
-
-def run_sn60_challenge(
-    *,
-    king_artifact_path: str,
-    candidate_artifact_path: str,
-    project_keys: list[str],
-    candidate_submission_id: str,
-    lane_id: str = SN60_MINER_LANE_ID,
-    output_root: str | None = None,
-    replicas_per_project: int = DEFAULT_REPLICAS_PER_PROJECT,
-    sandbox_root: str | None = None,
-    benchmark_file: str | None = None,
-    sandbox_commit: str | None = None,
-    screening_result: dict[str, object] | None = None,
-    public_root: str | None = None,
-    execution_hook: Sn60ExecutionHook | None = None,
-    evaluation_hook: Sn60EvaluationHook | None = None,
-) -> ChallengeSummary:
-    if not project_keys:
-        raise ValueError("SN60 challenge requires at least one screening project key.")
-    sandbox_source = resolve_sn60_sandbox_source(
-        sandbox_root=sandbox_root,
-        benchmark_file=benchmark_file,
-        sandbox_commit=sandbox_commit,
-        scorer_version="ScaBenchScorerV2",
-    )
-    # Task 1 -- static anti-cheat gate BEFORE the duel (source-only, no inference).
-    # A cheating / no-op submission is closed here without spending any duel cost.
-    update_live_status(
-        {
-            "state": "screening",
-            "phase": "sn60-screening",
-            "lane_id": lane_id,
-            "candidate_submission_id": candidate_submission_id,
-            "project_keys": list(project_keys),
-        }
-    )
-    static_screening = run_sn60_static_screening(
-        candidate_artifact_path=candidate_artifact_path,
-        project_key=project_keys[0],
-        output_root=output_root or "runs",
-        sandbox_source=sandbox_source,
-    )
-    if not static_screening.passed:
-        update_live_status(
-            {
-                "state": "verifying",
-                "phase": "verifying",
-                "lane_id": lane_id,
-                "promotion_ready": False,
-                "promotion_reason": "candidate failed SN60 screening",
-            }
-        )
-        summary = build_sn60_screening_failure_summary(
-            king_artifact_path=king_artifact_path,
-            candidate_artifact_path=candidate_artifact_path,
-            project_keys=project_keys,
-            lane_id=lane_id,
-            screening=static_screening,
-        )
-        write_challenge_summary(
-            Path(static_screening.result_path).with_name("challenge_summary.json"),
-            summary,
-        )
-        record_sn60_screening_failure_provenance(
-            lane_id=lane_id,
-            candidate_submission_id=candidate_submission_id,
-            king_artifact_path=king_artifact_path,
-            project_keys=project_keys,
-            replicas_per_project=replicas_per_project,
-            screening=static_screening,
-            public_root=public_root,
-        )
-        return summary
-
-    execution_screening: Sn60ScreeningResult | None = None
-    candidate_reused_execution_payloads: dict[tuple[str, int], dict[str, object]] | None = None
-    if sn60_screener_project_enabled():
-        screener_project_key = resolve_sn60_screener_project_key(project_keys)
-        update_live_status(
-            {
-                "state": "screening",
-                "phase": "sn60-screener-project",
-                "lane_id": lane_id,
-                "candidate_submission_id": candidate_submission_id,
-                "project_key": screener_project_key,
-            }
-        )
-        execution_screening = run_optional_sn60_screener_project(
-            candidate_artifact_path=candidate_artifact_path,
-            project_keys=project_keys,
-            output_root=output_root or "runs",
-            sandbox_source=sandbox_source,
-            execution_hook=execution_hook,
-        )
-        if not execution_screening.passed:
-            update_live_status(
-                {
-                    "state": "verifying",
-                    "phase": "verifying",
-                    "lane_id": lane_id,
-                    "promotion_ready": False,
-                    "promotion_reason": "candidate failed SN60 screener project",
-                }
-            )
-            summary = build_sn60_screening_failure_summary(
-                king_artifact_path=king_artifact_path,
-                candidate_artifact_path=candidate_artifact_path,
-                project_keys=project_keys,
-                lane_id=lane_id,
-                screening=execution_screening,
-            )
-            write_challenge_summary(
-                Path(execution_screening.result_path).with_name("challenge_summary.json"),
-                summary,
-            )
-            record_sn60_screening_failure_provenance(
-                lane_id=lane_id,
-                candidate_submission_id=candidate_submission_id,
-                king_artifact_path=king_artifact_path,
-                project_keys=project_keys,
-                replicas_per_project=replicas_per_project,
-                screening=execution_screening,
-                public_root=public_root,
-            )
-            return summary
-        if execution_screening.project_key in project_keys:
-            candidate_reused_execution_payloads = {
-                (execution_screening.project_key, 1): load_passed_screening_report(
-                    execution_screening
-                )
-            }
-
-    # The duel runs every sampled project (resilient): bad/empty output is scored 0
-    # for that problem and evaluation continues to the next one.
-    update_live_status(
-        {
-            "state": "evaluating",
-            "phase": "sn60-duel",
-            "lane_id": lane_id,
-            "candidate_submission_id": candidate_submission_id,
-            "project_keys": list(project_keys),
-            "replicas_per_project": replicas_per_project,
-        }
-    )
-    duel_summary = run_sn60_bitsec_duel(
-        king_artifact_path=king_artifact_path,
-        candidate_artifact_path=candidate_artifact_path,
-        project_keys=project_keys,
-        output_root=output_root,
-        replicas_per_project=replicas_per_project,
-        sandbox_root=sandbox_source.sandbox_root,
-        benchmark_file=sandbox_source.benchmark_file,
-        sandbox_commit=sandbox_source.sandbox_commit,
-        execution_hook=execution_hook,
-        evaluation_hook=evaluation_hook,
-        candidate_reused_execution_payloads=candidate_reused_execution_payloads,
-    )
-    # Task 2 -- execution screening is informational only. It never closes the PR;
-    # it records a per-problem findings note (reusing the duel's own reports) so the
-    # feedback can report how many problems produced findings.
-    screening = build_sn60_execution_note_result(
-        candidate_artifact_path=candidate_artifact_path,
-        project_key=project_keys[0],
-        sandbox_source=sandbox_source,
-        run_id=build_sn60_screening_id(),
-        result_path=Path(duel_summary.output_root) / "screening_result.json",
-        finding_quality=summarize_candidate_finding_quality(duel_summary),
-    )
-    effective_screening_result = screening_result_payload(screening)
-    screening_context: dict[str, object] = {}
-    if screening_result:
-        screening_context["caller_context"] = screening_result
-    if execution_screening is not None:
-        screening_context["screener_project"] = screening_result_payload(execution_screening)
-    if screening_context:
-        effective_screening_result["details"] = {
-            **dict(effective_screening_result.get("details") or {}),
-            **screening_context,
-        }
-        Path(screening.result_path).write_text(
-            json.dumps(effective_screening_result, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-    summary = sn60_duel_to_challenge_summary(
-        duel_summary,
-        lane_id=lane_id,
-        screening_result=effective_screening_result,
-    )
-    challenge_summary_path = Path(duel_summary.output_root) / "challenge_summary.json"
-    write_challenge_summary(challenge_summary_path, summary)
-    record_sn60_lane_provenance(
-        lane_id=lane_id,
-        candidate_submission_id=candidate_submission_id,
-        duel_summary=duel_summary,
-        screening_result=effective_screening_result,
-        public_root=public_root,
-    )
-    update_live_status(
-        {
-            "state": "verifying",
-            "phase": "verifying",
-            "lane_id": lane_id,
-            "challenge_summary_path": str(challenge_summary_path),
-            "promotion_ready": summary.promotion_ready,
-            "promotion_reason": summary.promotion_reason,
-        }
-    )
-    return summary
 
 
 def sn60_duel_to_challenge_summary(
@@ -1059,26 +844,6 @@ def sn60_evaluator_version(duel_summary: Sn60DuelSummary) -> str:
         f"@{short_hash(duel_summary.sandbox_source.sandbox_commit)}"
     )
 
-
-def render_challenge_summary(summary: ChallengeSummary) -> str:
-    lines: list[str] = []
-    lines.append(f"Challenge run: {summary.run_id}")
-    lines.append(f"Mode: {summary.mode}")
-    lines.append(f"Manifest: `{summary.manifest_path}`")
-    lines.append(f"Candidate artifact: `{summary.candidate_artifact}`")
-    lines.append(f"Evaluator version: {summary.evaluator_version}")
-    lines.append(f"Validator model: {summary.validator_model}")
-    lines.append(f"King artifact hash: {short_hash(summary.king_artifact_hash)}")
-    lines.append(f"Candidate artifact hash: {short_hash(summary.candidate_artifact_hash)}")
-    if summary.primary_pool_fingerprint:
-        lines.append(f"Primary pool fingerprint: {short_hash(summary.primary_pool_fingerprint)}")
-    lines.append("")
-    lines.append("Primary pool")
-    lines.extend(render_pool(summary.primary))
-    lines.append("")
-    lines.append(f"Promotion ready: {'yes' if summary.promotion_ready else 'no'}")
-    lines.append(f"Reason: {summary.promotion_reason}")
-    return "\n".join(lines)
 
 
 def load_challenge_summary(path: str) -> ChallengeSummary:

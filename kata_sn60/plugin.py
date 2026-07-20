@@ -324,16 +324,6 @@ class Sn60BitsecPlugin(SubnetPlugin):
 
         register_sn60_cli(subparsers)
 
-    def add_evaluate_arguments(self, parser) -> None:
-        from kata_sn60.cli import sn60_add_evaluate_arguments
-
-        sn60_add_evaluate_arguments(parser)
-
-    def evaluate_from_cli(self, args) -> int:
-        from kata_sn60.cli import sn60_evaluate_from_cli
-
-        return sn60_evaluate_from_cli(args)
-
     def add_round_arguments(self, parser) -> None:
         from kata_sn60.cli import sn60_add_round_arguments
 

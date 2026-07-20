@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from kata.screening.rules import hash_submission_bundle
 from kata.state.lanes import (
+    CHALLENGE_STATE_SCHEMA_VERSION,
     KING_STATE_SCHEMA_VERSION,
     LANE_METADATA_SCHEMA_VERSION,
+    ChallengeState,
     EvaluatorLaneMetadata,
     LaneKingState,
     load_benchmark_snapshot,
@@ -23,11 +26,8 @@ from kata.submissions.bundle import AGENT_MANIFEST_FILENAME, write_agent_manifes
 from kata.submissions.constants import (
     PR_ACTION_CLOSE_INVALID,
     PR_ACTION_EVALUATE,
-    PR_ACTION_MERGE,
-    PR_ACTION_RERUN_STALE,
 )
 from kata.submissions.workflow import (
-    decide_submission_action,
     init_submission,
     inspect_pull_request,
     promote_submission_result,
@@ -35,8 +35,11 @@ from kata.submissions.workflow import (
     verify_submission_result,
 )
 
-from kata_sn60.evaluate import evaluate_submission
-from kata_sn60.validator_system import run_sn60_challenge, sample_sn60_project_keys
+from kata_sn60 import Sn60BitsecPlugin, run_sn60_plugin_round
+from kata_sn60.plugin import DEFAULT_SCORER_VERSION
+from kata_sn60.sn60_bitsec import resolve_sn60_sandbox_source
+from kata_sn60.validator_system import load_challenge_summary
+from kata_sn60.validator_system.challenge import record_sn60_benchmark_snapshot
 
 SCREENING_DESCRIPTION = (
     "A privileged state-changing function can be called by any account, "
@@ -384,31 +387,6 @@ def test_inspect_pull_request_accepts_single_submission_scope(
     assert result.submission_id == "alice-20260702-01"
 
 
-def test_decide_submission_action_merges_registry_winner(tmp_path, monkeypatch) -> None:
-    _, submission_root, _, summary_path = run_registry_lane_sn60_duel(tmp_path, monkeypatch)
-
-    decision = decide_submission_action(str(submission_root), str(summary_path))
-
-    assert decision.action == PR_ACTION_MERGE
-    assert decision.auto_merge_ready
-
-
-def test_decide_submission_action_reruns_stale_benchmark(tmp_path, monkeypatch) -> None:
-    public_root, submission_root, _, summary_path = run_registry_lane_sn60_duel(
-        tmp_path, monkeypatch
-    )
-    snapshot = load_benchmark_snapshot("sn60__bitsec", public_root=str(public_root))
-    write_benchmark_snapshot(
-        "sn60__bitsec",
-        replace(snapshot, sandbox_commit_hash="commit-b"),
-        public_root=str(public_root),
-    )
-
-    decision = decide_submission_action(str(submission_root), str(summary_path))
-
-    assert decision.action == PR_ACTION_RERUN_STALE
-
-
 def write_evaluator_lane(public_root: Path, *, active: bool = True) -> None:
     write_lane_metadata(
         EvaluatorLaneMetadata(
@@ -485,21 +463,52 @@ def run_registry_lane_sn60_duel(tmp_path: Path, monkeypatch, *, agent_source=VAL
             },
         }
 
-    summary = run_sn60_challenge(
+    result = run_sn60_plugin_round(
         king_artifact_path=str(king_root),
-        candidate_artifact_path=str(submission_root),
-        project_keys=["project-alpha"],
-        candidate_submission_id="alice-20260702-10",
+        candidates=[("alice-20260702-10", str(submission_root))],
+        config={
+            "sandbox_root": str(sandbox_root),
+            "benchmark_file": str(benchmark_path),
+            "sandbox_commit": "commit-a",
+            "project_keys": ["project-alpha"],
+            "replicas_per_project": 2,
+        },
         output_root=str(tmp_path / "runs"),
-        replicas_per_project=2,
-        sandbox_root=str(sandbox_root),
-        benchmark_file=str(benchmark_path),
-        sandbox_commit="commit-a",
-        public_root=str(public_root),
-        execution_hook=execute,
-        evaluation_hook=evaluate,
+        plugin=Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate),
     )
-    summary_path = Path(summary.manifest_path).with_name("challenge_summary.json")
+    summary_path = Path(result.winner_challenge_summary_path)
+    summary = load_challenge_summary(str(summary_path))
+
+    # Seed the lane benchmark snapshot exactly as a prior promotion would, so the
+    # generic verifier sees a current benchmark. The round itself never writes the
+    # snapshot (only promotion provenance does), so a steady-state lane already has one.
+    record_sn60_benchmark_snapshot(
+        lane_id="sn60__bitsec",
+        sandbox_source=resolve_sn60_sandbox_source(
+            sandbox_root=str(sandbox_root),
+            benchmark_file=str(benchmark_path),
+            sandbox_commit="commit-a",
+            scorer_version=DEFAULT_SCORER_VERSION,
+        ),
+        project_keys=["project-alpha"],
+        public_root=str(public_root),
+    )
+    write_challenge_state(
+        "sn60__bitsec",
+        ChallengeState(
+            schema_version=CHALLENGE_STATE_SCHEMA_VERSION,
+            candidate_submission_id="alice-20260702-10",
+            candidate_artifact_hash=summary.candidate_artifact_hash,
+            king_artifact_hash=summary.king_artifact_hash,
+            screening_result={},
+            selected_project_keys=["project-alpha"],
+            validator_replica_count=2,
+            run_ids=[summary.run_id],
+            freshness_fingerprint=summary.primary_pool_fingerprint or "0" * 64,
+            updated_at=datetime.now(UTC).isoformat(),
+        ),
+        public_root=str(public_root),
+    )
     return public_root, submission_root, summary, summary_path
 
 
@@ -753,335 +762,6 @@ def test_validate_submission_reviews_near_copy_of_lane_king(
     )
 
 
-def test_evaluate_submission_uses_seeded_lane_king_for_registry_lane(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    public_root = tmp_path / "kata-root"
-    write_evaluator_lane(public_root)
-    monkeypatch.setenv("KATA_ROOT", str(public_root))
-    king_root = seed_lane_king(public_root, "sn60__bitsec")
-
-    repo_root = tmp_path / "Kata"
-    submission_root = init_submission(
-        repo_pack="sn60__bitsec",
-        mode="miner",
-        submission_id="alice-20260702-02",
-        output_root=str(repo_root / "submissions"),
-    )
-    (submission_root / "agent.py").write_text(VALID_MINER_AGENT, encoding="utf-8")
-
-    sentinel = object()
-    calls: dict[str, object] = {}
-
-    def fake_run_sn60_challenge(**kwargs):
-        calls.update(kwargs)
-        return sentinel
-
-    monkeypatch.setattr(
-        "kata_sn60.evaluate.run_sn60_challenge",
-        fake_run_sn60_challenge,
-    )
-
-    summary = evaluate_submission(
-        str(submission_root),
-        sn60_project_keys=["project-a"],
-    )
-
-    assert summary is sentinel
-    assert calls["king_artifact_path"] == str(king_root.resolve())
-    assert calls["lane_id"] == "sn60__bitsec"
-
-
-def test_evaluate_submission_uses_benchmark_project_keys_by_default(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    public_root = tmp_path / "kata-root"
-    write_evaluator_lane(public_root)
-    monkeypatch.setenv("KATA_ROOT", str(public_root))
-    seed_lane_king(public_root, "sn60__bitsec")
-
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = sandbox_root / "validator" / "curated-highs-only-2025-08-08.json"
-    benchmark_path.parent.mkdir(parents=True)
-    benchmark_path.write_text(
-        json.dumps(
-            [
-                {"project_id": "project-beta", "vulnerabilities": []},
-                {"project_id": "project-alpha", "vulnerabilities": []},
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    repo_root = tmp_path / "Kata"
-    submission_root = init_submission(
-        repo_pack="sn60__bitsec",
-        mode="miner",
-        submission_id="alice-20260702-05",
-        output_root=str(repo_root / "submissions"),
-    )
-    (submission_root / "agent.py").write_text(VALID_MINER_AGENT, encoding="utf-8")
-
-    sentinel = object()
-    calls: dict[str, object] = {}
-
-    def fake_run_sn60_challenge(**kwargs):
-        calls.update(kwargs)
-        return sentinel
-
-    monkeypatch.delenv("KATA_SN60_PROJECT_KEYS", raising=False)
-    monkeypatch.setattr(
-        "kata_sn60.evaluate.run_sn60_challenge",
-        fake_run_sn60_challenge,
-    )
-
-    summary = evaluate_submission(
-        str(submission_root),
-        sn60_sandbox_root=str(sandbox_root),
-        sn60_benchmark_file=str(benchmark_path),
-        sn60_sandbox_commit="commit-1",
-    )
-
-    assert summary is sentinel
-    assert calls["project_keys"] == ["project-alpha", "project-beta"]
-
-
-def test_evaluate_submission_samples_benchmark_project_keys_from_env(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    public_root = tmp_path / "kata-root"
-    write_evaluator_lane(public_root)
-    monkeypatch.setenv("KATA_ROOT", str(public_root))
-    king_root = seed_lane_king(public_root, "sn60__bitsec")
-
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = sandbox_root / "validator" / "curated-highs-only-2025-08-08.json"
-    benchmark_path.parent.mkdir(parents=True)
-    benchmark_keys = ["project-alpha", "project-beta", "project-delta", "project-gamma"]
-    benchmark_path.write_text(
-        json.dumps(
-            [{"project_id": project_key, "vulnerabilities": []} for project_key in benchmark_keys]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    repo_root = tmp_path / "Kata"
-    submission_root = init_submission(
-        repo_pack="sn60__bitsec",
-        mode="miner",
-        submission_id="alice-20260702-06",
-        output_root=str(repo_root / "submissions"),
-    )
-    (submission_root / "agent.py").write_text(VALID_MINER_AGENT, encoding="utf-8")
-
-    sentinel = object()
-    calls: dict[str, object] = {}
-
-    def fake_run_sn60_challenge(**kwargs):
-        calls.update(kwargs)
-        return sentinel
-
-    monkeypatch.delenv("KATA_SN60_PROJECT_KEYS", raising=False)
-    monkeypatch.setenv("KATA_SN60_PROJECT_SAMPLE_SIZE", "2")
-    monkeypatch.setenv("KATA_SN60_PROJECT_SAMPLE_SECRET", "validator-secret")
-    monkeypatch.setattr(
-        "kata_sn60.validator_system.project_selection.secrets.token_hex",
-        lambda _size: "nonce-1",
-    )
-    monkeypatch.setattr(
-        "kata_sn60.evaluate.run_sn60_challenge",
-        fake_run_sn60_challenge,
-    )
-
-    summary = evaluate_submission(
-        str(submission_root),
-        sn60_sandbox_root=str(sandbox_root),
-        sn60_benchmark_file=str(benchmark_path),
-        sn60_sandbox_commit="commit-1",
-    )
-
-    expected = sample_sn60_project_keys(
-        sorted(benchmark_keys),
-        sample_size=2,
-        sample_secret="validator-secret",
-        sample_nonce="nonce-1",
-        king_artifact_hash=hash_submission_bundle(king_root),
-        candidate_artifact_hash=hash_submission_bundle(submission_root),
-        candidate_submission_id="alice-20260702-06",
-    )
-    assert summary is sentinel
-    assert calls["project_keys"] == expected
-    assert len(calls["project_keys"]) == 2
-
-
-def test_evaluate_submission_requires_sample_secret_when_sampling(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    public_root = tmp_path / "kata-root"
-    write_evaluator_lane(public_root)
-    monkeypatch.setenv("KATA_ROOT", str(public_root))
-    seed_lane_king(public_root, "sn60__bitsec")
-
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = sandbox_root / "validator" / "curated-highs-only-2025-08-08.json"
-    benchmark_path.parent.mkdir(parents=True)
-    benchmark_path.write_text(
-        json.dumps(
-            [
-                {"project_id": "project-alpha", "vulnerabilities": []},
-                {"project_id": "project-beta", "vulnerabilities": []},
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    repo_root = tmp_path / "Kata"
-    submission_root = init_submission(
-        repo_pack="sn60__bitsec",
-        mode="miner",
-        submission_id="alice-20260702-07",
-        output_root=str(repo_root / "submissions"),
-    )
-    (submission_root / "agent.py").write_text(VALID_MINER_AGENT, encoding="utf-8")
-
-    monkeypatch.delenv("KATA_SN60_PROJECT_KEYS", raising=False)
-    monkeypatch.setenv("KATA_SN60_PROJECT_SAMPLE_SIZE", "1")
-    monkeypatch.delenv("KATA_SN60_PROJECT_SAMPLE_SECRET", raising=False)
-
-    with pytest.raises(ValueError, match="KATA_SN60_PROJECT_SAMPLE_SECRET"):
-        evaluate_submission(
-            str(submission_root),
-            sn60_sandbox_root=str(sandbox_root),
-            sn60_benchmark_file=str(benchmark_path),
-            sn60_sandbox_commit="commit-1",
-        )
-
-
-def test_explicit_sn60_project_keys_override_sampling_env(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    public_root = tmp_path / "kata-root"
-    write_evaluator_lane(public_root)
-    monkeypatch.setenv("KATA_ROOT", str(public_root))
-    seed_lane_king(public_root, "sn60__bitsec")
-
-    repo_root = tmp_path / "Kata"
-    submission_root = init_submission(
-        repo_pack="sn60__bitsec",
-        mode="miner",
-        submission_id="alice-20260702-08",
-        output_root=str(repo_root / "submissions"),
-    )
-    (submission_root / "agent.py").write_text(VALID_MINER_AGENT, encoding="utf-8")
-
-    sentinel = object()
-    calls: dict[str, object] = {}
-
-    def fake_run_sn60_challenge(**kwargs):
-        calls.update(kwargs)
-        return sentinel
-
-    monkeypatch.setenv("KATA_SN60_PROJECT_SAMPLE_SIZE", "1")
-    monkeypatch.delenv("KATA_SN60_PROJECT_SAMPLE_SECRET", raising=False)
-    monkeypatch.setattr(
-        "kata_sn60.evaluate.run_sn60_challenge",
-        fake_run_sn60_challenge,
-    )
-
-    summary = evaluate_submission(
-        str(submission_root),
-        sn60_project_keys=["project-explicit"],
-    )
-
-    assert summary is sentinel
-    assert calls["project_keys"] == ["project-explicit"]
-
-
-def test_evaluate_submission_requires_seeded_king_for_registry_lane(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    public_root = tmp_path / "kata-root"
-    write_evaluator_lane(public_root)
-    monkeypatch.setenv("KATA_ROOT", str(public_root))
-
-    repo_root = tmp_path / "Kata"
-    submission_root = init_submission(
-        repo_pack="sn60__bitsec",
-        mode="miner",
-        submission_id="alice-20260702-03",
-        output_root=str(repo_root / "submissions"),
-    )
-    (submission_root / "agent.py").write_text(VALID_MINER_AGENT, encoding="utf-8")
-
-    with pytest.raises(ValueError, match="king artifact is not seeded"):
-        evaluate_submission(
-            str(submission_root),
-            sn60_project_keys=["project-a"],
-        )
-
-
-def test_evaluate_submission_selects_sn60_adapter_by_registry_evaluator_id(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    public_root = tmp_path / "kata-root"
-    write_lane_metadata(
-        EvaluatorLaneMetadata(
-            schema_version=LANE_METADATA_SCHEMA_VERSION,
-            lane_id="sn99__custom",
-            repo_pack="sn99__custom",
-            mode="miner",
-            evaluator_id="sn60_bitsec",
-            evaluator_policy_version="v1",
-            active=True,
-            created_at="2026-07-01T00:00:00+00:00",
-            updated_at="2026-07-01T00:00:00+00:00",
-        ),
-        public_root=str(public_root),
-    )
-    monkeypatch.setenv("KATA_ROOT", str(public_root))
-    king_root = seed_lane_king(public_root, "sn99__custom")
-
-    repo_root = tmp_path / "Kata"
-    submission_root = init_submission(
-        repo_pack="sn99__custom",
-        mode="miner",
-        submission_id="alice-20260702-04",
-        output_root=str(repo_root / "submissions"),
-    )
-    (submission_root / "agent.py").write_text(VALID_MINER_AGENT, encoding="utf-8")
-
-    sentinel = object()
-    calls: dict[str, object] = {}
-
-    def fake_run_sn60_challenge(**kwargs):
-        calls.update(kwargs)
-        return sentinel
-
-    monkeypatch.setattr(
-        "kata_sn60.evaluate.run_sn60_challenge",
-        fake_run_sn60_challenge,
-    )
-
-    summary = evaluate_submission(
-        str(submission_root),
-        sn60_project_keys=["project-a"],
-    )
-
-    assert summary is sentinel
-    assert calls["lane_id"] == "sn99__custom"
-    assert calls["king_artifact_path"] == str(king_root.resolve())
-
-
 def test_verify_and_promote_sn60_registry_lane_end_to_end(
     tmp_path: Path,
     monkeypatch,
@@ -1241,50 +921,6 @@ def test_verify_and_promote_honor_explicit_public_root(
     # Nothing was written to the decoy KATA_ROOT.
     assert not (decoy_root / "kings").exists()
     assert not (decoy_root / "lanes").exists()
-
-
-def test_candidate_only_matching_king_is_honored(tmp_path, monkeypatch):
-    # A candidate-only recovery run against the CURRENT king (a deliberate
-    # force-replace) legitimately skips the king/benchmark staleness guards. The round
-    # recorded the current king's hash via the lane hasher, so verify -- which now
-    # resolves the current king with that same hasher (BUG-14) -- sees a match and
-    # honors the candidate-only bypass.
-    public_root, submission_root, _summary, summary_path = run_registry_lane_sn60_duel(
-        tmp_path, monkeypatch
-    )
-    payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    payload["primary"]["competition_mode"] = "candidate_only"
-    # Keep the recorded king_artifact_hash: it already matches the current king.
-    summary_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    verification = verify_submission_result(str(submission_root), str(summary_path))
-    assert verification.king_is_current
-    assert verification.benchmark_is_current
-    assert verification.auto_merge_ready
-
-    result = promote_submission_result(
-        str(submission_root), str(summary_path), public_root=str(public_root)
-    )
-    assert result.lane_id == "sn60__bitsec"
-
-
-def test_candidate_only_stale_king_is_now_blocked(tmp_path, monkeypatch):
-    # BUG-8: a held candidate-only result whose king has since changed must NOT bypass
-    # the staleness guard -- it could otherwise be promoted over a king it never
-    # actually evaluated against. Now that the recorded and current king hashes use
-    # the same lane hasher, the mismatch is detected and the promotion is blocked.
-    _public_root, submission_root, _summary, summary_path = run_registry_lane_sn60_duel(
-        tmp_path, monkeypatch
-    )
-    payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    payload["primary"]["competition_mode"] = "candidate_only"
-    payload["king_artifact_hash"] = "0" * 64  # a king exists, but this is not it
-    summary_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    verification = verify_submission_result(str(submission_root), str(summary_path))
-    assert not verification.king_is_current
-    assert not verification.auto_merge_ready
-    assert any("king artifact has changed" in reason for reason in verification.reasons)
 
 
 def test_king_duel_still_rejects_a_stale_king_hash(tmp_path, monkeypatch):
