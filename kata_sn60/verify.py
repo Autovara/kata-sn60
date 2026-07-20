@@ -1,4 +1,4 @@
-"""SN60-specific challenge freshness and candidate-only verification.
+"""SN60-specific challenge freshness verification.
 
 Kata calls these through plugin verification hooks, leaving shared submission
 verification independent from SN60 benchmark details.

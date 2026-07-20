@@ -261,8 +261,8 @@ class Sn60BitsecPlugin(SubnetPlugin):
 
     def beats_king(self, candidate: ScoreCard, king: ScoreCard | None) -> bool:
         if king is None:
-            # No king to beat (candidate-only recovery): a candidate qualifies as
-            # winner only if it found at least one true-positive vulnerability.
+            # No king was scored (lazy king): a candidate qualifies as winner only
+            # if it found at least one true-positive vulnerability.
             return candidate.payload.true_positives > 0
         decision = evaluate_sn60_promotion(king=king.payload, candidate=candidate.payload)
         return decision.promotion_ready
