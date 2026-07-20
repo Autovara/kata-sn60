@@ -60,7 +60,7 @@ class Sn60Problems:
     sandbox_source: Sn60SandboxSource
     replicas_per_project: int
     run_id: str
-    round_cache_path: str | None = None
+    challenge_cache_path: str | None = None
     # One passed execution screener per candidate may be reused as the first
     # scored replica. Entries are created only after the real TEE execution has
     # passed report validation for the current bundle and sampled project.
@@ -87,10 +87,10 @@ class Sn60BitsecPlugin(SubnetPlugin):
     mode = "miner"
     # SN60 scores come from LLM-driven vulnerability detection plus an LLM judge, so
     # a variant's score drifts run-to-run even on a fixed benchmark. The score is
-    # therefore NOISY (score each contender afresh); the king is re-scored every round.
+    # therefore NOISY (score each contender afresh); the king is re-scored every challenge.
     # The benchmark/answer-key is deterministic, but the scoring pipeline is not, so
     # this must never be labelled DETERMINISTIC (which would sanction a persistent,
-    # cross-round score cache that compares a stale king against fresh candidates).
+    # cross-challenge score cache that compares a stale king against fresh candidates).
     scoring_profile = ScoringProfile.NOISY
     validator_identity = SN60_VALIDATOR_MODEL  # "sn60-bitsec-sandbox"
 
@@ -155,7 +155,7 @@ class Sn60BitsecPlugin(SubnetPlugin):
             sandbox_source=sandbox_source,
             replicas_per_project=replicas_per_project,
             run_id=seed,
-            round_cache_path=config.get("round_cache_path"),
+            challenge_cache_path=config.get("challenge_cache_path"),
         )
 
     def benchmark_identity(self, problems: Sn60Problems) -> str:
@@ -176,9 +176,9 @@ class Sn60BitsecPlugin(SubnetPlugin):
         # "king"/"candidate" so execution/evaluation hooks see the same variant as the
         # legacy duel path.
         variant_name = "king" if label == "king" else "candidate"
-        if label == "king" and problems.round_cache_path:
+        if label == "king" and problems.challenge_cache_path:
             execution_hook, evaluation_hook = build_cached_king_hooks(
-                scoreboard_path=problems.round_cache_path,
+                scoreboard_path=problems.challenge_cache_path,
                 king_hash=hash_bundle_root(artifact_root),
                 benchmark_version=benchmark_version_key(
                     source.scorer_version, source.benchmark_sha256
@@ -324,27 +324,27 @@ class Sn60BitsecPlugin(SubnetPlugin):
 
         register_sn60_cli(subparsers)
 
-    def add_round_arguments(self, parser) -> None:
-        from kata_sn60.cli import sn60_add_round_arguments
+    def add_challenge_arguments(self, parser) -> None:
+        from kata_sn60.cli import sn60_add_challenge_arguments
 
-        sn60_add_round_arguments(parser)
+        sn60_add_challenge_arguments(parser)
 
-    def build_round_config(self, args) -> dict:
-        from kata_sn60.cli import sn60_build_round_config
+    def build_challenge_config(self, args) -> dict:
+        from kata_sn60.cli import sn60_build_challenge_config
 
-        return sn60_build_round_config(args)
+        return sn60_build_challenge_config(args)
 
-    def round_result_json(self, result) -> dict:
-        from kata_sn60.cli import sn60_round_result_json
+    def challenge_result_json(self, result) -> dict:
+        from kata_sn60.cli import sn60_challenge_result_json
 
-        return sn60_round_result_json(result)
+        return sn60_challenge_result_json(result)
 
-    def render_round_text(self, result) -> str:
-        from kata_sn60.cli import sn60_render_round_text
+    def render_challenge_text(self, result) -> str:
+        from kata_sn60.cli import sn60_render_challenge_text
 
-        return sn60_render_round_text(result)
+        return sn60_render_challenge_text(result)
 
-    def run_round(
+    def run_challenge(
         self,
         *,
         king_agent_path,
@@ -354,10 +354,10 @@ class Sn60BitsecPlugin(SubnetPlugin):
         run_id=None,
         progress_path=None,
     ):
-        # Lazy import avoids the module-load cycle (round.py imports this module).
-        from .round import run_sn60_plugin_round
+        # Lazy import avoids the module-load cycle (challenge.py imports this module).
+        from .challenge import run_sn60_plugin_challenge
 
-        return run_sn60_plugin_round(
+        return run_sn60_plugin_challenge(
             king_artifact_path=king_agent_path,
             candidates=candidates,
             config=config,

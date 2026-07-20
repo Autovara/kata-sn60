@@ -16,7 +16,7 @@ from kata_sn60.validator_system import (
 )
 
 
-def _run_round(
+def _run_challenge(
     *,
     king_artifact_path,
     candidates,
@@ -31,10 +31,10 @@ def _run_round(
     progress_path=None,
     **_ignored,
 ):
-    """Score the king + candidates through the SN60 plugin round (the real path)."""
-    from kata_sn60 import Sn60BitsecPlugin, run_sn60_plugin_round
+    """Score the king + candidates through the SN60 plugin challenge (the real path)."""
+    from kata_sn60 import Sn60BitsecPlugin, run_sn60_plugin_challenge
 
-    return run_sn60_plugin_round(
+    return run_sn60_plugin_challenge(
         king_artifact_path=king_artifact_path,
         candidates=candidates,
         config={
@@ -298,7 +298,7 @@ def _detection_hooks():
     return ran, execute, evaluate
 
 
-def test_run_sn60_round_ranks_candidates_and_picks_strict_winner(tmp_path: Path) -> None:
+def test_run_sn60_challenge_ranks_candidates_and_picks_strict_winner(tmp_path: Path) -> None:
     sandbox_root = tmp_path / "sandbox"
     benchmark_path = write_sandbox_source(sandbox_root)
     king_root = tmp_path / "king"
@@ -309,10 +309,10 @@ def test_run_sn60_round_ranks_candidates_and_picks_strict_winner(tmp_path: Path)
         _write_detection_bundle(path, detection)
         candidates.append((name, str(path)))
     scoreboard = tmp_path / "king_scoreboard.json"
-    progress_path = tmp_path / "round-progress.json"
+    progress_path = tmp_path / "challenge-progress.json"
 
     ran, execute, evaluate = _detection_hooks()
-    result = _run_round(
+    result = _run_challenge(
         king_artifact_path=str(king_root),
         candidates=candidates,
         project_keys=["project-alpha"],
@@ -320,7 +320,7 @@ def test_run_sn60_round_ranks_candidates_and_picks_strict_winner(tmp_path: Path)
         replicas_per_project=1,
         sandbox_root=str(sandbox_root),
         benchmark_file=str(benchmark_path),
-        sandbox_commit="commit-round-1",
+        sandbox_commit="commit-challenge-1",
         king_scoreboard_path=str(scoreboard),
         execution_hook=execute,
         evaluation_hook=evaluate,
@@ -352,20 +352,20 @@ def test_run_sn60_round_ranks_candidates_and_picks_strict_winner(tmp_path: Path)
     assert result.promotion_ready is True
     assert result.king.aggregated_score == 0.25
 
-    # The king was scored once for the round (cached), the three candidates each ran.
+    # The king was scored once for the challenge (cached), the three candidates each ran.
     assert ran["king"] == 1
     assert ran["candidate"] == 3
-    assert (Path(result.output_root) / "round_summary.json").exists()
+    assert (Path(result.output_root) / "challenge_result.json").exists()
 
     # The winner's promotion artifact is persisted from the duel it already ran,
-    # so the king is promoted from this round -- no second duel at merge time.
+    # so the king is promoted from this challenge -- no second duel at merge time.
     assert result.winner_challenge_summary_path is not None
     summary_path = Path(result.winner_challenge_summary_path)
     assert summary_path.exists()
     assert summary_path.name == "challenge_summary.json"
 
 
-def test_run_sn60_round_optional_screener_skips_failed_candidate(
+def test_run_sn60_challenge_optional_screener_skips_failed_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -428,7 +428,7 @@ def test_run_sn60_round_optional_screener_skips_failed_candidate(
             },
         }
 
-    result = _run_round(
+    result = _run_challenge(
         king_artifact_path=str(king_root),
         candidates=candidates,
         project_keys=["project-alpha"],
@@ -436,7 +436,7 @@ def test_run_sn60_round_optional_screener_skips_failed_candidate(
         replicas_per_project=1,
         sandbox_root=str(sandbox_root),
         benchmark_file=str(benchmark_path),
-        sandbox_commit="commit-round-screener",
+        sandbox_commit="commit-challenge-screener",
         king_scoreboard_path=str(tmp_path / "king_scoreboard.json"),
         execution_hook=execute,
         evaluation_hook=evaluate,
@@ -455,12 +455,12 @@ def test_run_sn60_round_optional_screener_skips_failed_candidate(
     assert ran["king"] == 1
 
 
-def test_run_sn60_round_completes_when_every_candidate_fails_screener(
+def test_run_sn60_challenge_completes_when_every_candidate_fails_screener(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # If the execution screener rejects every candidate, no duel ever runs and the
-    # king is never scored. The round must still resolve as a clean no-winner
+    # king is never scored. The challenge must still resolve as a clean no-winner
     # result (king=None) rather than crashing on an assertion.
     sandbox_root = tmp_path / "sandbox"
     benchmark_path = write_sandbox_source(sandbox_root)
@@ -481,7 +481,7 @@ def test_run_sn60_round_completes_when_every_candidate_fails_screener(
             return {"success": False, "error": "candidate failed smoke run"}
         return {"success": True, "report": {"vulnerabilities": [{"title": "v"}]}}
 
-    result = _run_round(
+    result = _run_challenge(
         king_artifact_path=str(king_root),
         candidates=candidates,
         project_keys=["project-alpha"],
@@ -502,14 +502,14 @@ def test_run_sn60_round_completes_when_every_candidate_fails_screener(
     assert all(entry.screening_result["status"] == "failed" for entry in result.entries)
     assert ran.get("candidate", 0) == 0  # no duel ran
     assert ran.get("king", 0) == 0  # king never scored
-    # The round summary is written and re-readable with a null king.
+    # The challenge summary is written and re-readable with a null king.
     summary = json.loads(
-        (tmp_path / "runs" / result.run_id / "round_summary.json").read_text(encoding="utf-8")
+        (tmp_path / "runs" / result.run_id / "challenge_result.json").read_text(encoding="utf-8")
     )
     assert summary["king"] is None
 
 
-def test_run_sn60_round_has_no_winner_when_none_beats_king(tmp_path: Path) -> None:
+def test_run_sn60_challenge_has_no_winner_when_none_beats_king(tmp_path: Path) -> None:
     sandbox_root = tmp_path / "sandbox"
     benchmark_path = write_sandbox_source(sandbox_root)
     king_root = tmp_path / "king"
@@ -521,7 +521,7 @@ def test_run_sn60_round_has_no_winner_when_none_beats_king(tmp_path: Path) -> No
         candidates.append((name, str(path)))
 
     _ran, execute, evaluate = _detection_hooks()
-    result = _run_round(
+    result = _run_challenge(
         king_artifact_path=str(king_root),
         candidates=candidates,
         project_keys=["project-alpha"],
@@ -529,7 +529,7 @@ def test_run_sn60_round_has_no_winner_when_none_beats_king(tmp_path: Path) -> No
         replicas_per_project=1,
         sandbox_root=str(sandbox_root),
         benchmark_file=str(benchmark_path),
-        sandbox_commit="commit-round-2",
+        sandbox_commit="commit-challenge-2",
         execution_hook=execute,
         evaluation_hook=evaluate,
     )
@@ -541,7 +541,7 @@ def test_run_sn60_round_has_no_winner_when_none_beats_king(tmp_path: Path) -> No
     assert result.winner_challenge_summary_path is None
 
 
-def test_run_sn60_round_rejects_duplicate_submission_ids(tmp_path: Path) -> None:
+def test_run_sn60_challenge_rejects_duplicate_submission_ids(tmp_path: Path) -> None:
     sandbox_root = tmp_path / "sandbox"
     benchmark_path = write_sandbox_source(sandbox_root)
     king_root = tmp_path / "king"
@@ -550,12 +550,12 @@ def test_run_sn60_round_rejects_duplicate_submission_ids(tmp_path: Path) -> None
     _write_detection_bundle(candidate_root, 0.5)
 
     with pytest.raises(ValueError, match="Duplicate submission id"):
-        _run_round(
+        _run_challenge(
             king_artifact_path=str(king_root),
             candidates=[("dup", str(candidate_root)), ("dup", str(candidate_root))],
             project_keys=["project-alpha"],
             output_root=str(tmp_path / "runs"),
             sandbox_root=str(sandbox_root),
             benchmark_file=str(benchmark_path),
-            sandbox_commit="commit-round-3",
+            sandbox_commit="commit-challenge-3",
         )

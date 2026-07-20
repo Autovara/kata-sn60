@@ -249,7 +249,7 @@ def test_bootstrap_lane_king_publishes_a_public_baseline_proof(tmp_path: Path) -
                 "schema_version": 1,
                 "dashboard_url": "https://board.example",
                 "benchmark": {"name": "pinned-benchmark"},
-                "latest_round": {"round_id": "old-round"},
+                "latest_challenge": {"challenge_id": "old-challenge"},
             }
         ),
         encoding="utf-8",
@@ -274,6 +274,6 @@ def test_bootstrap_lane_king_publishes_a_public_baseline_proof(tmp_path: Path) -
         "artifact_hash": result.king.current_king_artifact_hash,
         "promoted_at": result.king.promotion_timestamp,
     }
-    assert payload["latest_round"] is None
+    assert payload["latest_challenge"] is None
     assert payload["benchmark"] == {"name": "pinned-benchmark"}
     assert payload["dashboard_url"] == "https://board.example"

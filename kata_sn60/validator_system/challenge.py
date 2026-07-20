@@ -373,11 +373,11 @@ def sn60_variant_rank(
     )
 
 
-DEFAULT_SN60_ROUND_SCHEMA_VERSION = 1
+DEFAULT_SN60_CHALLENGE_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
-class Sn60RoundEntry:
+class Sn60ChallengeEntry:
     submission_id: str
     artifact_path: str
     artifact_hash: str
@@ -389,7 +389,7 @@ class Sn60RoundEntry:
 
 
 @dataclass(frozen=True)
-class Sn60RoundResult:
+class Sn60ChallengeResult:
     schema_version: int
     run_id: str
     created_at: str
@@ -398,7 +398,7 @@ class Sn60RoundResult:
     replicas_per_project: int
     sandbox_source: Sn60SandboxSource
     king: Sn60VariantSummary | None
-    entries: list[Sn60RoundEntry]
+    entries: list[Sn60ChallengeEntry]
     winner_submission_id: str | None
     promotion_ready: bool
     promotion_reason: str
@@ -422,12 +422,12 @@ class Sn60BaselineResult:
     competition_mode: str = "baseline_only"
 
 
-def build_sn60_round_id() -> str:
+def build_sn60_challenge_id() -> str:
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return f"sn60-round-{timestamp}-{secrets.token_hex(3)}"
+    return f"sn60-challenge-{timestamp}-{secrets.token_hex(3)}"
 
 
-def write_sn60_round_summary(path: Path, result: Sn60RoundResult) -> None:
+def write_sn60_challenge_result(path: Path, result: Sn60ChallengeResult) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = asdict(result)
     payload["validator_replica_count"] = 1
@@ -483,7 +483,7 @@ def _sn60_variant_progress(summary: Sn60VariantSummary) -> dict[str, object]:
 
 
 def _write_progress_atomic(progress: dict[str, object], progress_path: str | None) -> None:
-    """Write the live round-progress file atomically.
+    """Write the live challenge-progress file atomically.
 
     The dashboard polls this file, and problems now finish in bursts, so a plain
     write could be read half-serialized. Write to a temp sibling and rename
@@ -555,8 +555,8 @@ def run_sn60_baseline_only(
 ) -> Sn60BaselineResult:
     """Score one proof-only external baseline without evaluating any Kata king.
 
-    This is intentionally not a competition round. It exists so operators can
-    compare a public SN60 agent against a saved Kata round result without spending
+    This is intentionally not a competition challenge. It exists so operators can
+    compare a public SN60 agent against a saved Kata challenge result without spending
     tokens re-running the already-scored Kata king/winner.
     """
     if not project_keys:
@@ -576,7 +576,7 @@ def run_sn60_baseline_only(
     output_base = (
         Path(output_root).expanduser().resolve() if output_root else Path("runs").resolve()
     )
-    run_id = build_sn60_round_id()
+    run_id = build_sn60_challenge_id()
     run_root = output_base / run_id
     run_root.mkdir(parents=True, exist_ok=False)
 
@@ -601,7 +601,7 @@ def run_sn60_baseline_only(
         replica_results=results,
     )
     result = Sn60BaselineResult(
-        schema_version=DEFAULT_SN60_ROUND_SCHEMA_VERSION,
+        schema_version=DEFAULT_SN60_CHALLENGE_SCHEMA_VERSION,
         run_id=run_id,
         created_at=datetime.now(UTC).isoformat(),
         output_root=str(run_root),

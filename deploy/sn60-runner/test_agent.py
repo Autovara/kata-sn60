@@ -4,7 +4,7 @@ The bitsec problem image's harness (run_sandbox.py) imports the mounted agent an
 `agent_main()`, then writes the result to /app/report.json. So a valid agent must define
 `agent_main()` returning {"vulnerabilities": [...]}. This stub returns a fixed finding
 (ignores the project + inference) -- enough to prove the room runs the real problem
-harness end to end. A real round mounts the miner's own agent here.
+harness end to end. A real challenge mounts the miner's own agent here.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """Persistent per-project cache of the SN60 king's benchmark scores.
 
 The king's score on a given project is stable for a fixed king artifact and a
-fixed benchmark, so re-running the king every duel/round is wasted inference.
+fixed benchmark, so re-running the king every duel/challenge is wasted inference.
 This module caches the king's per-project execution + evaluation payloads keyed
 by ``(king_hash, benchmark_version)``.
 

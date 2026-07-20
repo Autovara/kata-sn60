@@ -1,7 +1,7 @@
-"""SN60 live-progress writer for plugin-driven rounds.
+"""SN60 live-progress writer for plugin-driven challenges.
 
 The generic orchestrator emits subnet-agnostic :class:`ProgressUpdate`s; this writer
-folds them into the exact ``round-progress.json`` structure the dashboard reads today
+folds them into the exact ``challenge-progress.json`` structure the dashboard reads today
 (king + per-candidate entries, per-problem breakdowns, running metrics). Keeping the
 board-specific format here means the core stays generic while the live view is
 unchanged.
@@ -9,11 +9,11 @@ unchanged.
 
 from __future__ import annotations
 
-from kata.core.round import RoundOutcome
+from kata.core.challenge import ChallengeOutcome
 from kata.plugins.contract import ProgressUpdate
 
 from kata_sn60.validator_system.challenge import (
-    DEFAULT_SN60_ROUND_SCHEMA_VERSION,
+    DEFAULT_SN60_CHALLENGE_SCHEMA_VERSION,
     _write_progress_atomic,
 )
 
@@ -21,8 +21,8 @@ from kata_sn60.validator_system.challenge import (
 _STRUCTURAL_KEYS = frozenset({"done", "total", "state", "submission_id"})
 
 
-class Sn60RoundProgress:
-    """Maintains and atomically writes the board's round-progress.json."""
+class Sn60ChallengeProgress:
+    """Maintains and atomically writes the board's challenge-progress.json."""
 
     def __init__(
         self,
@@ -35,7 +35,7 @@ class Sn60RoundProgress:
     ) -> None:
         self._path = progress_path
         self._progress: dict = {
-            "schema_version": DEFAULT_SN60_ROUND_SCHEMA_VERSION,
+            "schema_version": DEFAULT_SN60_CHALLENGE_SCHEMA_VERSION,
             "state": "executing",
             "run_id": run_id,
             "competition_mode": "king_duel",
@@ -96,8 +96,8 @@ class Sn60RoundProgress:
                 entry[key] = value
         self._write()
 
-    def finalize(self, outcome: RoundOutcome, plugin) -> None:
-        """Mark the round completed and record the winner + per-candidate beats_king."""
+    def finalize(self, outcome: ChallengeOutcome, plugin) -> None:
+        """Mark the challenge completed and record the winner + per-candidate beats_king."""
         king_card = outcome.king.card if outcome.king is not None else None
         for variant in outcome.ranked:
             entry = self._by_label.get(variant.label)

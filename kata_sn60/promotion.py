@@ -26,13 +26,13 @@ def record_sn60_promotion_provenance(
     summary,
     public_root: str | None,
 ) -> None:
-    """Persist SN60 lane challenge/promotion records for a promoted round winner."""
+    """Persist SN60 lane challenge/promotion records for a promoted challenge winner."""
     duel_summary = load_sn60_duel_summary(summary.primary.run_summary_path)
     screening_result = {
         "schema_version": 1,
         "run_id": summary.run_id,
         "status": "passed",
-        "stage": "round",
+        "stage": "challenge",
         "artifact_path": verification.submission_path,
         "artifact_hash": verification.candidate_artifact_hash,
         "project_key": None,

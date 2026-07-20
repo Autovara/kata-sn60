@@ -1,8 +1,8 @@
-"""Phase 3b tests: a full SN60 round through the generic orchestrator.
+"""Phase 3b tests: a full SN60 challenge through the generic orchestrator.
 
-``run_sn60_plugin_round`` must produce a ``Sn60RoundResult`` whose *contract* fields
+``run_sn60_plugin_challenge`` must produce a ``Sn60ChallengeResult`` whose *contract* fields
 (winner, ranking, per-variant scores, king summary, sandbox source, project keys) match
-the legacy ``run_sn60_round`` exactly. Internal artifact paths, run ids and timestamps
+the legacy ``run_sn60_challenge`` exactly. Internal artifact paths, run ids and timestamps
 are allowed to differ (they are not part of the consumed contract).
 """
 
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from kata_sn60 import Sn60BitsecPlugin, run_sn60_plugin_round
+from kata_sn60 import Sn60BitsecPlugin, run_sn60_plugin_challenge
 
 
 def _write_detection_bundle(root: Path, detection: float) -> None:
@@ -104,14 +104,14 @@ def _build_inputs(tmp_path: Path):
         paths[name] = str(path)
     return sandbox_root, benchmark_path, king_root, specs, paths
 
-def test_run_sn60_plugin_round_writes_board_progress(tmp_path: Path) -> None:
-    # The plugin round must write round-progress.json in the same shape the board
+def test_run_sn60_plugin_challenge_writes_board_progress(tmp_path: Path) -> None:
+    # The plugin challenge must write challenge-progress.json in the same shape the board
     # reads today (king + per-candidate entries, per-problem breakdowns, winner).
     sandbox_root, benchmark_path, king_root, specs, paths = _build_inputs(tmp_path)
     execute, evaluate = _detection_hooks()
-    progress_path = tmp_path / "round-progress.json"
+    progress_path = tmp_path / "challenge-progress.json"
 
-    run_sn60_plugin_round(
+    run_sn60_plugin_challenge(
         king_artifact_path=str(king_root),
         candidates=[(name, paths[name]) for name, _ in specs],
         config={
@@ -145,7 +145,7 @@ def test_run_sn60_plugin_round_writes_board_progress(tmp_path: Path) -> None:
     assert isinstance(progress["king"]["projects"], list) and progress["king"]["projects"]
 
 
-def test_run_sn60_plugin_round_reuses_passed_screener_as_first_replica(
+def test_run_sn60_plugin_challenge_reuses_passed_screener_as_first_replica(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sandbox_root, benchmark_path, king_root, _specs, paths = _build_inputs(tmp_path)
@@ -169,7 +169,7 @@ def test_run_sn60_plugin_round_reuses_passed_screener_as_first_replica(
         return payload
 
     monkeypatch.setenv("KATA_SN60_ENABLE_SCREENER_PROJECT", "true")
-    result = run_sn60_plugin_round(
+    result = run_sn60_plugin_challenge(
         king_artifact_path=str(king_root),
         candidates=[("cand-a", paths["cand-a"])],
         config={
@@ -189,7 +189,7 @@ def test_run_sn60_plugin_round_reuses_passed_screener_as_first_replica(
     assert result.entries[0].candidate.successful_runs == 2
 
 
-def test_run_sn60_plugin_round_no_winner_when_king_unbeaten(tmp_path: Path) -> None:
+def test_run_sn60_plugin_challenge_no_winner_when_king_unbeaten(tmp_path: Path) -> None:
     sandbox_root = tmp_path / "sandbox"
     benchmark_path = _write_benchmark(sandbox_root)
     king_root = tmp_path / "king"
@@ -198,7 +198,7 @@ def test_run_sn60_plugin_round_no_winner_when_king_unbeaten(tmp_path: Path) -> N
     _write_detection_bundle(weak, 0.1)  # tp = 0
     execute, evaluate = _detection_hooks()
 
-    result = run_sn60_plugin_round(
+    result = run_sn60_plugin_challenge(
         king_artifact_path=str(king_root),
         candidates=[("weak", str(weak))],
         config={
@@ -218,7 +218,7 @@ def test_run_sn60_plugin_round_no_winner_when_king_unbeaten(tmp_path: Path) -> N
     assert result.entries[0].beats_king is False
 
 
-def test_run_sn60_plugin_round_always_writes_candidate_summary_for_loser(
+def test_run_sn60_plugin_challenge_always_writes_candidate_summary_for_loser(
     tmp_path: Path,
 ) -> None:
     # Continuous mode: even when the candidate loses this challenge's fresh king, its
@@ -232,7 +232,7 @@ def test_run_sn60_plugin_round_always_writes_candidate_summary_for_loser(
     _write_detection_bundle(weak, 0.1)  # tp = 0
     execute, evaluate = _detection_hooks()
 
-    result = run_sn60_plugin_round(
+    result = run_sn60_plugin_challenge(
         king_artifact_path=str(king_root),
         candidates=[("weak", str(weak))],
         config={
@@ -259,14 +259,14 @@ def test_run_sn60_plugin_round_always_writes_candidate_summary_for_loser(
 
 
 @pytest.mark.parametrize("submission_id", ["../escape", "nested/id", ".", " candidate"])
-def test_run_sn60_plugin_round_rejects_unsafe_submission_id(
+def test_run_sn60_plugin_challenge_rejects_unsafe_submission_id(
     tmp_path: Path, submission_id: str
 ) -> None:
     sandbox_root, benchmark_path, king_root, _specs, paths = _build_inputs(tmp_path)
     execute, evaluate = _detection_hooks()
 
     with pytest.raises(ValueError, match="path-safe identifier"):
-        run_sn60_plugin_round(
+        run_sn60_plugin_challenge(
             king_artifact_path=str(king_root),
             candidates=[(submission_id, paths["cand-a"])],
             config={
@@ -281,12 +281,12 @@ def test_run_sn60_plugin_round_rejects_unsafe_submission_id(
         )
 
 
-def test_run_sn60_plugin_round_rejects_duplicate_submission_ids(tmp_path: Path) -> None:
+def test_run_sn60_plugin_challenge_rejects_duplicate_submission_ids(tmp_path: Path) -> None:
     sandbox_root, benchmark_path, king_root, _specs, paths = _build_inputs(tmp_path)
     execute, evaluate = _detection_hooks()
 
     with pytest.raises(ValueError, match="Duplicate submission id"):
-        run_sn60_plugin_round(
+        run_sn60_plugin_challenge(
             king_artifact_path=str(king_root),
             candidates=[("duplicate", paths["cand-a"]), ("duplicate", paths["cand-b"])],
             config={
@@ -301,12 +301,12 @@ def test_run_sn60_plugin_round_rejects_duplicate_submission_ids(tmp_path: Path) 
         )
 
 
-def test_run_sn60_plugin_round_rejects_unknown_project_key(tmp_path: Path) -> None:
+def test_run_sn60_plugin_challenge_rejects_unknown_project_key(tmp_path: Path) -> None:
     sandbox_root, benchmark_path, king_root, _specs, paths = _build_inputs(tmp_path)
     execute, evaluate = _detection_hooks()
 
     with pytest.raises(ValueError, match="not present in the resolved benchmark snapshot"):
-        run_sn60_plugin_round(
+        run_sn60_plugin_challenge(
             king_artifact_path=str(king_root),
             candidates=[("candidate", paths["cand-a"])],
             config={

@@ -1,10 +1,10 @@
-"""Phase 3a tests: the subnet-agnostic round orchestrator.
+"""Phase 3a tests: the subnet-agnostic challenge orchestrator.
 
 Two layers:
 - A trivial numeric stub plugin exercises the control flow (ranking, king logic,
   candidate-only) fast and in isolation.
 - The real SN60 plugin proves the generic orchestrator produces the *same* winner and
-  ranking as the existing ``run_sn60_round`` (parity), so Phase 3b's swap is safe.
+  ranking as the existing ``run_sn60_challenge`` (parity), so Phase 3b's swap is safe.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kata.core.round import run_plugin_round
+from kata.core.challenge import run_plugin_challenge
 from kata.plugins.contract import EnvSpec, ScoreCard, ScoringProfile, SubnetPlugin
 
 
@@ -48,13 +48,13 @@ class _NumPlugin(SubnetPlugin):
 
 
 def test_orchestrator_ranks_and_picks_winner_over_king() -> None:
-    outcome = run_plugin_round(
+    outcome = run_plugin_challenge(
         _NumPlugin(),
         king_agent_path="0.25",
         candidates=[("a", "0.0"), ("b", "0.5"), ("c", "0.75")],
         config={},
         output_root="/unused",
-        seed="round-1",
+        seed="challenge-1",
     )
     assert [v.label for v in outcome.ranked] == ["c", "b", "a"]
     assert outcome.king is not None and outcome.king.card.comparable == 0.25
@@ -64,21 +64,21 @@ def test_orchestrator_ranks_and_picks_winner_over_king() -> None:
 
 
 def test_orchestrator_no_winner_when_king_unbeaten() -> None:
-    outcome = run_plugin_round(
+    outcome = run_plugin_challenge(
         _NumPlugin(),
         king_agent_path="0.9",
         candidates=[("a", "0.1"), ("b", "0.5")],
         config={},
         output_root="/unused",
-        seed="round-1",
+        seed="challenge-1",
     )
     assert outcome.winner is None
     assert [v.label for v in outcome.ranked] == ["b", "a"]
 
 
-def test_plugin_run_round_default_delegates_to_orchestrator() -> None:
-    # The interface's default run_round drives the generic orchestrator.
-    outcome = _NumPlugin().run_round(
+def test_plugin_run_challenge_default_delegates_to_orchestrator() -> None:
+    # The interface's default run_challenge drives the generic orchestrator.
+    outcome = _NumPlugin().run_challenge(
         king_agent_path="0.25",
         candidates=[("a", "0.1"), ("b", "0.9")],
         config={},
@@ -91,13 +91,13 @@ def test_plugin_run_round_default_delegates_to_orchestrator() -> None:
 
 def test_orchestrator_skips_king_when_score_king_false() -> None:
     # Lazy king: score_king=False (no candidate qualified for scoring) skips the king.
-    outcome = run_plugin_round(
+    outcome = run_plugin_challenge(
         _NumPlugin(),
         king_agent_path="0.9",  # ignored because score_king=False
         candidates=[("a", "0.1"), ("b", "0.5")],
         config={},
         output_root="/unused",
-        seed="round-1",
+        seed="challenge-1",
         score_king=False,
     )
     assert outcome.king is None

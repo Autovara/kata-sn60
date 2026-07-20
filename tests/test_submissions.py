@@ -35,7 +35,7 @@ from kata.submissions.workflow import (
     verify_submission_result,
 )
 
-from kata_sn60 import Sn60BitsecPlugin, run_sn60_plugin_round
+from kata_sn60 import Sn60BitsecPlugin, run_sn60_plugin_challenge
 from kata_sn60.plugin import DEFAULT_SCORER_VERSION
 from kata_sn60.sn60_bitsec import resolve_sn60_sandbox_source
 from kata_sn60.validator_system import load_challenge_summary
@@ -463,7 +463,7 @@ def run_registry_lane_sn60_duel(tmp_path: Path, monkeypatch, *, agent_source=VAL
             },
         }
 
-    result = run_sn60_plugin_round(
+    result = run_sn60_plugin_challenge(
         king_artifact_path=str(king_root),
         candidates=[("alice-20260702-10", str(submission_root))],
         config={
@@ -480,7 +480,7 @@ def run_registry_lane_sn60_duel(tmp_path: Path, monkeypatch, *, agent_source=VAL
     summary = load_challenge_summary(str(summary_path))
 
     # Seed the lane benchmark snapshot exactly as a prior promotion would, so the
-    # generic verifier sees a current benchmark. The round itself never writes the
+    # generic verifier sees a current benchmark. The challenge itself never writes the
     # snapshot (only promotion provenance does), so a steady-state lane already has one.
     record_sn60_benchmark_snapshot(
         lane_id="sn60__bitsec",

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from kata.plugins.registry import register_plugin
 
+from .challenge import build_sn60_challenge_result, run_sn60_plugin_challenge
 from .plugin import Sn60BitsecPlugin, Sn60Problems, Sn60RawRun
-from .round import build_sn60_round_result, run_sn60_plugin_round
 
 #: The singleton SN60 plugin instance the core resolves by evaluator id.
 SN60_BITSEC_PLUGIN = Sn60BitsecPlugin()
@@ -21,6 +21,6 @@ __all__ = [
     "Sn60BitsecPlugin",
     "Sn60Problems",
     "Sn60RawRun",
-    "build_sn60_round_result",
-    "run_sn60_plugin_round",
+    "build_sn60_challenge_result",
+    "run_sn60_plugin_challenge",
 ]

@@ -1,10 +1,10 @@
-"""Build SN60 round artifacts from a generic ``RoundOutcome``.
+"""Build SN60 challenge artifacts from a generic ``ChallengeOutcome``.
 
-``run_sn60_plugin_round`` runs a full SN60 round entirely through the subnet-agnostic
-:func:`~kata.core.round.run_plugin_round` orchestrator and reconstructs the exact
-``Sn60RoundResult`` (winner challenge summary + round_summary.json + board progress).
+``run_sn60_plugin_challenge`` runs a full SN60 challenge entirely through the subnet-agnostic
+:func:`~kata.core.challenge.run_plugin_challenge` orchestrator and reconstructs the exact
+``Sn60ChallengeResult`` (winner challenge summary + challenge_result.json + board progress).
 It preserves SN60's optional execution screener and lazy-king behavior, so it is a
-drop-in for the legacy ``run_sn60_round``.
+drop-in for the legacy ``run_sn60_challenge``.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from kata.core.round import RoundOutcome, ScoredVariant, run_plugin_round
+from kata.core.challenge import ChallengeOutcome, ScoredVariant, run_plugin_challenge
 
 from kata_sn60.sn60_bitsec import (
     Sn60DuelSummary,
@@ -22,30 +22,30 @@ from kata_sn60.sn60_bitsec import (
     write_sn60_duel_summary,
 )
 from kata_sn60.validator_system.challenge import (
-    DEFAULT_SN60_ROUND_SCHEMA_VERSION,
-    Sn60RoundEntry,
-    Sn60RoundResult,
+    DEFAULT_SN60_CHALLENGE_SCHEMA_VERSION,
+    Sn60ChallengeEntry,
+    Sn60ChallengeResult,
     _sn60_variant_progress,
-    build_sn60_round_id,
+    build_sn60_challenge_id,
     failed_candidate_variant_summary,
     run_optional_sn60_screener_project,
     sn60_duel_to_challenge_summary,
     sn60_variant_rank,
     write_challenge_summary,
-    write_sn60_round_summary,
+    write_sn60_challenge_result,
 )
 from kata_sn60.validator_system.screening import (
     load_passed_screening_report,
     screening_result_payload,
 )
 
+from .challenge_inputs import validate_challenge_candidates
 from .plugin import Sn60BitsecPlugin, Sn60Problems
-from .progress import Sn60RoundProgress
-from .round_inputs import validate_round_candidates
+from .progress import Sn60ChallengeProgress
 
 
 def _duel_challenge_summary_for(
-    outcome: RoundOutcome,
+    outcome: ChallengeOutcome,
     plugin: Sn60BitsecPlugin,
     variant: ScoredVariant,
     *,
@@ -57,7 +57,7 @@ def _duel_challenge_summary_for(
     problems: Sn60Problems = outcome.problems
     variant_root = Path(output_root) / variant.label
     duel = Sn60DuelSummary(
-        schema_version=DEFAULT_SN60_ROUND_SCHEMA_VERSION,
+        schema_version=DEFAULT_SN60_CHALLENGE_SCHEMA_VERSION,
         run_id=f"{run_id}-{variant.label}",
         created_at=datetime.now(UTC).isoformat(),
         output_root=str(variant_root),
@@ -79,8 +79,8 @@ def _duel_challenge_summary_for(
     return str(summary_path)
 
 
-def build_sn60_round_result(
-    outcome: RoundOutcome,
+def build_sn60_challenge_result(
+    outcome: ChallengeOutcome,
     plugin: Sn60BitsecPlugin,
     *,
     run_id: str,
@@ -90,8 +90,8 @@ def build_sn60_round_result(
     screener_run_ids: dict[str, str] | None = None,
     screened_labels: frozenset[str] = frozenset(),
     always_write_candidate_summary: bool = False,
-) -> Sn60RoundResult:
-    """Reconstruct the SN60 round result from a generic outcome and write it.
+) -> Sn60ChallengeResult:
+    """Reconstruct the SN60 challenge result from a generic outcome and write it.
 
     ``screened_out`` are candidates that failed the execution screener (never scored);
     they are merged in and ranked with the scored candidates, exactly like the legacy
@@ -120,7 +120,7 @@ def build_sn60_round_result(
         else:
             beats_king = plugin.beats_king(variant.card, king_card)
         entries.append(
-            Sn60RoundEntry(
+            Sn60ChallengeEntry(
                 submission_id=variant.label,
                 artifact_path=str(Path(variant.agent_path).expanduser().resolve()),
                 artifact_hash=variant.card.payload.artifact_hash,
@@ -167,8 +167,8 @@ def build_sn60_round_result(
         else "no candidate beat the current SN60 king"
     )
 
-    result = Sn60RoundResult(
-        schema_version=DEFAULT_SN60_ROUND_SCHEMA_VERSION,
+    result = Sn60ChallengeResult(
+        schema_version=DEFAULT_SN60_CHALLENGE_SCHEMA_VERSION,
         run_id=run_id,
         created_at=datetime.now(UTC).isoformat(),
         output_root=str(output_root),
@@ -183,11 +183,11 @@ def build_sn60_round_result(
         winner_challenge_summary_path=winner_challenge_summary_path,
         competition_mode="king_duel",
     )
-    write_sn60_round_summary(Path(output_root) / "round_summary.json", result)
+    write_sn60_challenge_result(Path(output_root) / "challenge_result.json", result)
     return result
 
 
-def run_sn60_plugin_round(
+def run_sn60_plugin_challenge(
     *,
     king_artifact_path: str,
     candidates: list[tuple[str, str]],
@@ -196,19 +196,19 @@ def run_sn60_plugin_round(
     run_id: str | None = None,
     plugin: Sn60BitsecPlugin | None = None,
     progress_path: str | None = None,
-) -> Sn60RoundResult:
-    """Run a full SN60 round through the generic orchestrator and build its result.
+) -> Sn60ChallengeResult:
+    """Run a full SN60 challenge through the generic orchestrator and build its result.
 
     Screens each candidate (env-gated) before scoring, scores the king lazily (only
     when a candidate qualifies), and writes board-format live progress when
     ``progress_path`` is set.
     """
-    candidates = validate_round_candidates(candidates)
+    candidates = validate_challenge_candidates(candidates)
     plugin = plugin or Sn60BitsecPlugin()
     always_write_candidate_summary = bool(config.get("always_write_candidate_summary"))
-    run_id = run_id or build_sn60_round_id()
-    round_root = Path(output_root).expanduser().resolve() / run_id
-    round_root.mkdir(parents=True, exist_ok=False)
+    run_id = run_id or build_sn60_challenge_id()
+    challenge_root = Path(output_root).expanduser().resolve() / run_id
+    challenge_root.mkdir(parents=True, exist_ok=False)
 
     problems: Sn60Problems = plugin.sample_problems(seed=run_id, config=config)
     validate_sn60_project_keys(
@@ -216,7 +216,7 @@ def run_sn60_plugin_round(
         sandbox_source=problems.sandbox_source,
     )
     writer = (
-        Sn60RoundProgress(
+        Sn60ChallengeProgress(
             run_id=run_id,
             project_keys=problems.project_keys,
             candidate_labels=[label for label, _ in candidates],
@@ -239,7 +239,7 @@ def run_sn60_plugin_round(
         screening = run_optional_sn60_screener_project(
             candidate_artifact_path=agent_path,
             project_keys=problems.project_keys,
-            output_root=str(round_root / label / "screening"),
+            output_root=str(challenge_root / label / "screening"),
             sandbox_source=problems.sandbox_source,
             execution_hook=execution_hook,
         )
@@ -279,17 +279,17 @@ def run_sn60_plugin_round(
                 snapshot=_sn60_variant_progress(failed_summary),
             )
 
-    # Lazy king: only score the king when a candidate qualified, so a round where
+    # Lazy king: only score the king when a candidate qualified, so a challenge where
     # everyone is screened out never runs (or reports) the king.
     score_king_effective = bool(qualified)
     scoring_problems = replace(problems, screened_execution_payloads=screened_execution_payloads)
 
-    outcome = run_plugin_round(
+    outcome = run_plugin_challenge(
         plugin,
         king_agent_path=king_artifact_path,
         candidates=qualified,
         config=config,
-        output_root=str(round_root),
+        output_root=str(challenge_root),
         seed=run_id,
         score_king=score_king_effective,
         progress=writer.on_update if writer is not None else None,
@@ -299,11 +299,11 @@ def run_sn60_plugin_round(
     if writer is not None:
         writer.finalize(outcome, plugin)
 
-    return build_sn60_round_result(
+    return build_sn60_challenge_result(
         outcome,
         plugin,
         run_id=run_id,
-        output_root=str(round_root),
+        output_root=str(challenge_root),
         screened_out=screened_out,
         screening_payloads=screening_payloads,
         screener_run_ids=screener_run_ids,

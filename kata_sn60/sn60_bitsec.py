@@ -309,7 +309,7 @@ def run_sn60_bitsec_duel(
 
     # Score the king first: on the first duel this fills the king's 6 problems and
     # caches them; on every later duel the king is served from that cache (no
-    # inference), so the round is "king (all 6) -> candidate -> candidate -> ...".
+    # inference), so the challenge is "king (all 6) -> candidate -> candidate -> ...".
     king_results = score_variant_on_projects(
         run_id=run_id,
         run_root=run_root,
@@ -474,7 +474,7 @@ def build_cached_king_hooks(
     On a cache hit both hooks return the stored payloads (no Docker exec, no
     scorer call); the surrounding scoring path still materializes identical
     ``report.json`` / ``evaluation.json`` artifacts in the run. On a miss the
-    base hooks run and the payloads are recorded for future rounds.
+    base hooks run and the payloads are recorded for future challenges.
     """
     board: KingScoreboard = load_king_scoreboard(
         scoreboard_path,

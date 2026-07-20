@@ -1,6 +1,6 @@
 # kata-sn60 — compete on SN60 (Bitsec)
 
-The SN60 subnet plugin for [Kata](https://github.com/Autovara/kata). Everything specific to SN60 lives here: the task, the agent contract, the screening rules, and how agents are scored. This is the guide for **miners** who want to submit an agent. The generic Kata flow (open a PR, scheduled rounds, king promotion) is documented in [kata](https://github.com/Autovara/kata).
+The SN60 subnet plugin for [Kata](https://github.com/Autovara/kata). Everything specific to SN60 lives here: the task, the agent contract, the screening rules, and how agents are scored. This is the guide for **miners** who want to submit an agent. The generic Kata flow (open a PR, scheduled challenges, king promotion) is documented in [kata](https://github.com/Autovara/kata).
 
 SN60 (Bitsec) is a smart-contract security competition. Your agent is handed a real codebase (Solidity and similar) and must report the **high- and critical-severity vulnerabilities** it finds. The agent that reliably finds the most real bugs across the benchmark becomes the **king**.
 
@@ -103,7 +103,7 @@ uv run kata submission validate \
   --path submissions/sn60__bitsec/miner/alice-20260716-01
 ```
 
-Commit only your submission directory (including `sealed_inference_key`), push a branch, and open one PR against the default branch. kata-bot screens it and labels it `kata:pending`; the next round scores it.
+Commit only your submission directory (including `sealed_inference_key`), push a branch, and open one PR against the default branch. kata-bot screens it and labels it `kata:pending`; the next challenge scores it.
 
 ## Agent and bundle limits
 
@@ -117,7 +117,7 @@ Commit only your submission directory (including `sealed_inference_key`), push a
 
 ## Screening
 
-Before a round spends any inference, kata-bot screens your source. There are three outcomes.
+Before a challenge spends any inference, kata-bot screens your source. There are three outcomes.
 
 **Rejected and closed** (`kata:invalid`) — a hard failure:
 
@@ -129,7 +129,7 @@ Before a round spends any inference, kata-bot screens your source. There are thr
 - A `sealed_inference_key` that is not valid ciphertext (it must decode to at least 32 bytes).
 - Wrong identity, a bundle outside the limits above, or an exact/AST-equivalent copy of the current king.
 
-**Held for review** (`kata:review`) — a maintainer checks it before the round runs:
+**Held for review** (`kata:review`) — a maintainer checks it before the challenge runs:
 
 - A near-copy of the current king (highly similar, but not an exact copy).
 - Ambiguous benchmark-replay logic.
@@ -138,7 +138,7 @@ Before a round spends any inference, kata-bot screens your source. There are thr
 
 ## How you win (scoring)
 
-A round samples one or more benchmark projects — each is a real codebase with a known set of high/critical vulnerabilities. The king and every candidate are scored on the **same** projects, so results are directly comparable.
+A challenge samples one or more benchmark projects — each is a real codebase with a known set of high/critical vulnerabilities. The king and every candidate are scored on the **same** projects, so results are directly comparable.
 
 - **Replicas.** Each project runs a few times (production uses 3). A project counts as *passed* on a **two-thirds majority** — with 3 runs, 2 must pass. Repeating smooths out model noise.
 - **Per project the scorer reports:** true positives (real bugs you found), total expected, precision, F1, and pass/fail. A run that errors out counts as a *failed run* and contributes nothing.
@@ -149,7 +149,7 @@ A round samples one or more benchmark projects — each is a real codebase with 
   4. precision
   5. F1
 - **You must strictly beat the king** on that order to be promoted. An exact tie keeps the king.
-- **The king is re-scored fresh every round.** SN60 scores come from LLM-driven detection plus an LLM judge, so they drift run to run — nothing is cached across rounds, and a candidate always faces a freshly-scored king on the same projects.
+- **The king is re-scored fresh every challenge.** SN60 scores come from LLM-driven detection plus an LLM judge, so they drift run to run — nothing is cached across challenges, and a candidate always faces a freshly-scored king on the same projects.
 
 In short: find more real high/critical bugs, more reliably, with fewer false positives.
 

@@ -124,7 +124,7 @@ def test_sn60_plugin_sample_problems_and_identity(tmp_path: Path) -> None:
     benchmark_path = _write_benchmark(sandbox_root)
     plugin = _plugin()
     problems = plugin.sample_problems(
-        seed="round-1",
+        seed="challenge-1",
         config={
             "sandbox_root": str(sandbox_root),
             "benchmark_file": str(benchmark_path),
@@ -144,7 +144,7 @@ def test_sn60_plugin_scores_rank_and_beat_king_match_engine(tmp_path: Path) -> N
     benchmark_path = _write_benchmark(sandbox_root)
     plugin = _plugin()
     problems = plugin.sample_problems(
-        seed="round-1",
+        seed="challenge-1",
         config={
             "sandbox_root": str(sandbox_root),
             "benchmark_file": str(benchmark_path),

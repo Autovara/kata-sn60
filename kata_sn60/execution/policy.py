@@ -1,6 +1,6 @@
 """SN60 execution-backend policy.
 
-Production rounds use the attested TEE so a miner's sealed credential is the
+Production challenges use the attested TEE so a miner's sealed credential is the
 only inference credential available to its agent.  The local Docker sandbox is
 an explicit development mode, never an accidental production fallback.
 """

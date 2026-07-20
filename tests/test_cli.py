@@ -5,12 +5,12 @@ import types
 from pathlib import Path
 
 import pytest
-from kata.cli import build_parser, main, parse_round_candidate
+from kata.cli import build_parser, main, parse_challenge_candidate
 
-from kata_sn60.cli import sn60_round_result_json
+from kata_sn60.cli import sn60_challenge_result_json
 
 
-def test_sn60_round_result_json_preserves_projects_and_execution_screening() -> None:
+def test_sn60_challenge_result_json_preserves_projects_and_execution_screening() -> None:
     variant = types.SimpleNamespace(
         aggregated_score=0.0,
         average_detection_rate=0.0,
@@ -31,7 +31,7 @@ def test_sn60_round_result_json_preserves_projects_and_execution_screening() -> 
         "project_key": "project-alpha",
     }
     result = types.SimpleNamespace(
-        run_id="sn60-round-test",
+        run_id="sn60-challenge-test",
         output_root="/tmp/run",
         winner_submission_id=None,
         winner_challenge_summary_path=None,
@@ -54,7 +54,7 @@ def test_sn60_round_result_json_preserves_projects_and_execution_screening() -> 
         ],
     )
 
-    payload = sn60_round_result_json(result)
+    payload = sn60_challenge_result_json(result)
 
     assert payload["project_keys"] == ["project-alpha"]
     assert payload["replicas_per_project"] == 1
@@ -64,7 +64,7 @@ def test_sn60_round_result_json_preserves_projects_and_execution_screening() -> 
 def test_sn60_variant_detail_carries_the_bot_consumed_contract_fields() -> None:
     # The bot keys its running-average ledger on the king's artifact_hash and decides
     # king-bar collapse / per-project infra-failure from successful_runs. These MUST be
-    # in the stdout the bot consumes, not only in round_summary.json. Guards the shape
+    # in the stdout the bot consumes, not only in challenge_result.json. Guards the shape
     # mismatch that silently made continuous scoring inert.
     project = types.SimpleNamespace(
         project_key="project-alpha",
@@ -106,7 +106,7 @@ def test_sn60_variant_detail_carries_the_bot_consumed_contract_fields() -> None:
         entries=[],
     )
 
-    payload = sn60_round_result_json(result)
+    payload = sn60_challenge_result_json(result)
     king_json = payload["king"]
     assert king_json["artifact_hash"] == "king-hash-abc"
     assert king_json["successful_runs"] == 3
@@ -120,10 +120,10 @@ def test_top_level_cli_exposes_agent_competition_commands() -> None:
     )
     commands = set(subparser_action.choices)
 
-    assert {"king", "submission", "lane", "round", "sn60-baseline"} == commands
+    assert {"king", "submission", "lane", "challenge", "sn60-baseline"} == commands
 
 
-def test_sn60_baseline_cli_is_separate_from_round_mode() -> None:
+def test_sn60_baseline_cli_is_separate_from_challenge_mode() -> None:
     parser = build_parser()
     subparser_action = next(
         action for action in parser._actions if getattr(action, "choices", None)
@@ -261,11 +261,11 @@ def test_lane_cli_sync_registry_rebuilds_from_disk(tmp_path: Path, capsys) -> No
     assert payload["packs"] == ["sn60__bitsec"]
 
 
-def test_round_cli_unknown_evaluator_errors() -> None:
+def test_challenge_cli_unknown_evaluator_errors() -> None:
     with pytest.raises(SystemExit):
         main(
             [
-                "round",
+                "challenge",
                 "--evaluator",
                 "does-not-exist",
                 "--king-path",
@@ -276,24 +276,24 @@ def test_round_cli_unknown_evaluator_errors() -> None:
         )
 
 
-def test_parse_round_candidate_accepts_id_path_pairs() -> None:
-    assert parse_round_candidate("cand-1=/tmp/agent") == ("cand-1", "/tmp/agent")
-    assert parse_round_candidate(" cand-2 = /tmp/x ") == ("cand-2", "/tmp/x")
+def test_parse_challenge_candidate_accepts_id_path_pairs() -> None:
+    assert parse_challenge_candidate("cand-1=/tmp/agent") == ("cand-1", "/tmp/agent")
+    assert parse_challenge_candidate(" cand-2 = /tmp/x ") == ("cand-2", "/tmp/x")
 
 
-def test_parse_round_candidate_rejects_malformed_specs() -> None:
+def test_parse_challenge_candidate_rejects_malformed_specs() -> None:
     for bad in ("no-equals", "=only-path", "only-id="):
         with pytest.raises(SystemExit):
-            parse_round_candidate(bad)
+            parse_challenge_candidate(bad)
 
 
-def test_round_cli_parses_candidates_and_emits_json(monkeypatch, capsys) -> None:
+def test_challenge_cli_parses_candidates_and_emits_json(monkeypatch, capsys) -> None:
 
     fake_result = types.SimpleNamespace(
-        run_id="sn60-round-x",
-        output_root="/tmp/runs/sn60-round-x",
+        run_id="sn60-challenge-x",
+        output_root="/tmp/runs/sn60-challenge-x",
         winner_submission_id="cand-b",
-        winner_challenge_summary_path="/tmp/runs/sn60-round-x/d-1/challenge_summary.json",
+        winner_challenge_summary_path="/tmp/runs/sn60-challenge-x/d-1/challenge_summary.json",
         promotion_ready=True,
         promotion_reason="cand-b beat the current SN60 king",
         replicas_per_project=1,
@@ -338,15 +338,15 @@ def test_round_cli_parses_candidates_and_emits_json(monkeypatch, capsys) -> None
     )
     captured: dict[str, object] = {}
 
-    def fake_run_round(self, **kwargs):
+    def fake_run_challenge(self, **kwargs):
         captured.update(kwargs)
         return fake_result
 
-    monkeypatch.setattr("kata_sn60.plugin.Sn60BitsecPlugin.run_round", fake_run_round)
+    monkeypatch.setattr("kata_sn60.plugin.Sn60BitsecPlugin.run_challenge", fake_run_challenge)
 
     exit_code = main(
         [
-            "round",
+            "challenge",
             "--evaluator",
             "sn60_bitsec",
             "--king-path",
@@ -373,7 +373,7 @@ def test_round_cli_parses_candidates_and_emits_json(monkeypatch, capsys) -> None
     assert payload["entries"][0]["precision"] == 0.66
     assert payload["entries"][0]["f1_score"] == 0.5
 
-def test_round_cli_samples_problems_when_keys_omitted(tmp_path, monkeypatch, capsys) -> None:
+def test_challenge_cli_samples_problems_when_keys_omitted(tmp_path, monkeypatch, capsys) -> None:
 
     benchmark = tmp_path / "sandbox" / "validator" / "curated-highs-only-2025-08-08.json"
     benchmark.parent.mkdir(parents=True)
@@ -389,11 +389,11 @@ def test_round_cli_samples_problems_when_keys_omitted(tmp_path, monkeypatch, cap
 
     monkeypatch.delenv("KATA_SN60_PROJECT_KEYS", raising=False)
     monkeypatch.setenv("KATA_SN60_PROJECT_SAMPLE_SIZE", "3")
-    monkeypatch.setenv("KATA_SN60_PROJECT_SAMPLE_SECRET", "round-secret")
+    monkeypatch.setenv("KATA_SN60_PROJECT_SAMPLE_SECRET", "challenge-secret")
 
     captured: dict[str, object] = {}
 
-    def fake_run_round(self, **kwargs):
+    def fake_run_challenge(self, **kwargs):
         captured.update(kwargs)
         return types.SimpleNamespace(
             run_id="r",
@@ -422,11 +422,11 @@ def test_round_cli_samples_problems_when_keys_omitted(tmp_path, monkeypatch, cap
             entries=[],
         )
 
-    monkeypatch.setattr("kata_sn60.plugin.Sn60BitsecPlugin.run_round", fake_run_round)
+    monkeypatch.setattr("kata_sn60.plugin.Sn60BitsecPlugin.run_challenge", fake_run_challenge)
 
     exit_code = main(
         [
-            "round",
+            "challenge",
             "--evaluator",
             "sn60_bitsec",
             "--king-path",

@@ -4,7 +4,7 @@ A candidate can be run inside a confidential VM (Phala/dstack) that the miner pa
 whose key the owner never sees. This module holds the Kata-side pieces:
 
   * verify_room_run  -- check the room's attestation (genuine TEE, approved image, binds
-                        this exact answer + round), before trusting the answer;
+                        this exact answer + challenge), before trusting the answer;
   * evaluate_candidate_in_room -- mint a nonce, run the candidate in the room, verify, and
                         return the verified answer (report) for the normal judge to score;
   * HttpRoomLauncher -- drive ONE running room over HTTP, per candidate (the miner's sealed

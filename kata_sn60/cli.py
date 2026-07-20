@@ -1,4 +1,4 @@
-"""SN60 command-line extensions for rounds, submissions, and proof baselines.
+"""SN60 command-line extensions for challenges, submissions, and proof baselines.
 
 The plugin contributes these commands to the generic ``kata`` CLI without adding
 SN60-specific parser or output code to Kata core.
@@ -16,14 +16,14 @@ from kata_sn60.validator_system import (
 )
 
 
-def sn60_add_round_arguments(parser) -> None:
+def sn60_add_challenge_arguments(parser) -> None:
     parser.add_argument(
         "--sn60-project-key",
         action="append",
         default=None,
         help=(
             "SN60 project key to score every entrant on. Repeat per project. When "
-            "omitted, the round secretly samples this round's problems from the "
+            "omitted, the challenge secretly samples this challenge's problems from the "
             "benchmark (KATA_SN60_PROJECT_SAMPLE_SIZE / _SECRET)."
         ),
     )
@@ -33,7 +33,7 @@ def sn60_add_round_arguments(parser) -> None:
     parser.add_argument("--sn60-sandbox-commit", default=None)
 
 
-def sn60_build_round_config(args) -> dict:
+def sn60_build_challenge_config(args) -> dict:
     return {
         "sandbox_root": args.sn60_sandbox_root,
         "benchmark_file": args.sn60_benchmark_file,
@@ -43,11 +43,13 @@ def sn60_build_round_config(args) -> dict:
     }
 
 
-def sn60_round_result_json(result) -> dict:
+def sn60_challenge_result_json(result) -> dict:
     runs_per_project = result.replicas_per_project
     return {
         "run_id": result.run_id,
-        "round_summary_path": str((Path(result.output_root) / "round_summary.json").resolve()),
+        "challenge_result_path": str(
+            (Path(result.output_root) / "challenge_result.json").resolve()
+        ),
         "winner_submission_id": result.winner_submission_id,
         "winner_challenge_summary_path": result.winner_challenge_summary_path,
         "promotion_ready": result.promotion_ready,
@@ -81,7 +83,7 @@ def sn60_variant_detail(variant) -> dict:
     the consumed contract, not just dashboard detail: the bot keys the king's
     running-average ledger on ``artifact_hash`` and decides whether a variant's king
     bar collapsed / a project infra-failed from ``successful_runs``. They must ride in
-    this stdout payload, never only in the ``round_summary.json`` file.
+    this stdout payload, never only in the ``challenge_result.json`` file.
     """
     return {
         "artifact_hash": variant.artifact_hash,
@@ -114,8 +116,8 @@ def sn60_variant_detail(variant) -> dict:
     }
 
 
-def sn60_render_round_text(result) -> str:
-    lines = [f"SN60 round {result.run_id}"]
+def sn60_render_challenge_text(result) -> str:
+    lines = [f"SN60 challenge {result.run_id}"]
     if result.king is not None:
         lines.append(
             f"king pass score {sn60_pass_score(result.king):.3f} "
@@ -179,9 +181,9 @@ def register_sn60_cli(subparsers) -> None:
 
 
 def handle_sn60_baseline(args) -> int:
-    from kata.cli import parse_round_candidate, print_json
+    from kata.cli import parse_challenge_candidate, print_json
 
-    submission_id, artifact_path = parse_round_candidate(args.candidate)
+    submission_id, artifact_path = parse_challenge_candidate(args.candidate)
     result = run_sn60_baseline_only(
         submission_id=submission_id,
         artifact_path=artifact_path,

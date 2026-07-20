@@ -70,11 +70,11 @@ def screen_sn60_static_bundle(bundle_files: dict[str, str]) -> list[ScreeningFin
                 )
             )
 
-    # TEE rounds are miner-paid: the agent runs inside the attested room and pays for
+    # TEE challenges are miner-paid: the agent runs inside the attested room and pays for
     # its own inference with the miner's sealed provider key. A submission with no
     # sealed_inference_key has no inference credential, so it can never produce real
     # findings -- it would only burn one real room job to score 0. Reject it here at
-    # static screening (source-only, no inference) instead of admitting it to a round.
+    # static screening (source-only, no inference) instead of admitting it to a challenge.
     # When a key IS supplied it must be non-trivial ciphertext for the room.
     if _tee_execution_enabled():
         sealed_key = str(bundle_files.get(SEALED_KEY_FILENAME) or "").strip()

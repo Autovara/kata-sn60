@@ -150,7 +150,7 @@ def run_sn60_screening(
 
     ``require_findings=False`` is used for the optional SN60-style screener
     project gate: that gate proves the agent executes and returns valid report
-    JSON. When its project is part of the sampled round, the verified report is
+    JSON. When its project is part of the sampled challenge, the verified report is
     reused as that project's first scoring replica.
     """
     artifact_root = Path(candidate_artifact_path).expanduser().resolve()
