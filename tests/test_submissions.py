@@ -82,7 +82,7 @@ def make_miner_submission(
     monkeypatch.setenv("KATA_ROOT", str(public_root))
     repo_root = tmp_path / "Kata"
     submission_root = init_submission(
-        repo_pack="sn60__bitsec",
+        subnet_pack="sn60__bitsec",
         mode="miner",
         submission_id=submission_id,
         output_root=str(repo_root / "submissions"),
@@ -155,7 +155,7 @@ def test_validate_submission_accepts_subnet_pack_metadata_field(tmp_path, monkey
 
     assert result.is_valid
     assert result.metadata is not None
-    assert result.metadata.repo_pack == "sn60__bitsec"
+    assert result.metadata.subnet_pack == "sn60__bitsec"
 
 
 def test_validate_submission_rejects_off_scope_pr_changes(tmp_path, monkeypatch) -> None:
@@ -392,7 +392,7 @@ def write_evaluator_lane(public_root: Path, *, active: bool = True) -> None:
         EvaluatorLaneMetadata(
             schema_version=LANE_METADATA_SCHEMA_VERSION,
             lane_id="sn60__bitsec",
-            repo_pack="sn60__bitsec",
+            subnet_pack="sn60__bitsec",
             mode="miner",
             evaluator_id="sn60_bitsec",
             evaluator_policy_version="v1",
@@ -404,8 +404,8 @@ def write_evaluator_lane(public_root: Path, *, active: bool = True) -> None:
     )
 
 
-def seed_lane_king(public_root: Path, repo_pack: str) -> Path:
-    king_root = public_root / "kings" / repo_pack / "miner"
+def seed_lane_king(public_root: Path, subnet_pack: str) -> Path:
+    king_root = public_root / "kings" / subnet_pack / "miner"
     king_root.mkdir(parents=True)
     (king_root / "agent.py").write_text(SEED_MINER_AGENT, encoding="utf-8")
     write_agent_manifest(king_root / AGENT_MANIFEST_FILENAME)
@@ -428,7 +428,7 @@ def run_registry_lane_sn60_duel(tmp_path: Path, monkeypatch, *, agent_source=VAL
 
     repo_root = tmp_path / "Kata"
     submission_root = init_submission(
-        repo_pack="sn60__bitsec",
+        subnet_pack="sn60__bitsec",
         mode="miner",
         submission_id="alice-20260702-10",
         output_root=str(repo_root / "submissions"),
@@ -522,7 +522,7 @@ def test_validate_submission_accepts_miner_submission_for_registry_lane(
 
     repo_root = tmp_path / "Kata"
     submission_root = init_submission(
-        repo_pack="sn60__bitsec",
+        subnet_pack="sn60__bitsec",
         mode="miner",
         submission_id="alice-20260702-01",
         output_root=str(repo_root / "submissions"),
@@ -550,7 +550,7 @@ def test_validate_submission_holds_replay_signals_when_review_enabled(
 
     repo_root = tmp_path / "Kata"
     submission_root = init_submission(
-        repo_pack="sn60__bitsec",
+        subnet_pack="sn60__bitsec",
         mode="miner",
         submission_id="alice-20260702-01",
         output_root=str(repo_root / "submissions"),
@@ -583,7 +583,7 @@ def test_validate_submission_keeps_replay_signals_report_only_by_default(
 
     repo_root = tmp_path / "Kata"
     submission_root = init_submission(
-        repo_pack="sn60__bitsec",
+        subnet_pack="sn60__bitsec",
         mode="miner",
         submission_id="alice-20260702-01",
         output_root=str(repo_root / "submissions"),
@@ -616,7 +616,7 @@ def test_validate_submission_rejects_replay_signals_when_strict_enabled(
 
     repo_root = tmp_path / "Kata"
     submission_root = init_submission(
-        repo_pack="sn60__bitsec",
+        subnet_pack="sn60__bitsec",
         mode="miner",
         submission_id="alice-20260702-01",
         output_root=str(repo_root / "submissions"),
@@ -647,7 +647,7 @@ def test_validate_submission_rejects_known_answer_text_when_strict_enabled(
 
     repo_root = tmp_path / "Kata"
     submission_root = init_submission(
-        repo_pack="sn60__bitsec",
+        subnet_pack="sn60__bitsec",
         mode="miner",
         submission_id="alice-20260702-01",
         output_root=str(repo_root / "submissions"),
@@ -680,7 +680,7 @@ def test_init_submission_rejects_inactive_registry_lane(
 
     with pytest.raises(ValueError, match="not active in the pack registry"):
         init_submission(
-            repo_pack="sn60__bitsec",
+            subnet_pack="sn60__bitsec",
             mode="miner",
             submission_id="alice-20260702-01",
             output_root=str(tmp_path / "Kata" / "submissions"),
@@ -697,7 +697,7 @@ def test_validate_submission_rejects_copy_of_lane_king(
 
     repo_root = tmp_path / "Kata"
     submission_root = init_submission(
-        repo_pack="sn60__bitsec",
+        subnet_pack="sn60__bitsec",
         mode="miner",
         submission_id="alice-20260702-01",
         output_root=str(repo_root / "submissions"),
@@ -739,7 +739,7 @@ def test_validate_submission_reviews_near_copy_of_lane_king(
 
     repo_root = tmp_path / "Kata"
     submission_root = init_submission(
-        repo_pack="sn60__bitsec",
+        subnet_pack="sn60__bitsec",
         mode="miner",
         submission_id="alice-20260702-01",
         output_root=str(repo_root / "submissions"),

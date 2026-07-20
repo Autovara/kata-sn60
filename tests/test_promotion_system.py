@@ -30,7 +30,7 @@ def write_lane(public_root: Path, *, active: bool = True) -> None:
         EvaluatorLaneMetadata(
             schema_version=LANE_METADATA_SCHEMA_VERSION,
             lane_id="sn60__bitsec",
-            repo_pack="sn60__bitsec",
+            subnet_pack="sn60__bitsec",
             mode="miner",
             evaluator_id="sn60_bitsec",
             evaluator_policy_version="v1",
@@ -168,7 +168,7 @@ def test_resolve_lane_king_hash_falls_back_to_published_king(
 
     assert resolve_lane_king_hash(
         "sn60__bitsec",
-        repo_pack="sn60__bitsec",
+        subnet_pack="sn60__bitsec",
         mode="miner",
         public_root=str(tmp_path),
     ) == hash_submission_bundle(tmp_path / "kings/sn60__bitsec/miner")
@@ -184,7 +184,7 @@ def test_promote_lane_king_publishes_bundle_and_updates_lane_state(
     entry = find_evaluator_pack_entry("sn60__bitsec", "miner", public_root=str(tmp_path))
     assert entry is not None
     verification = types.SimpleNamespace(
-        repo_pack="sn60__bitsec",
+        subnet_pack="sn60__bitsec",
         mode="miner",
         submission_id="alice-20260708-01",
         submission_path=str(candidate_root),

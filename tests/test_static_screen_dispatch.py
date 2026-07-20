@@ -65,7 +65,7 @@ def _restore_registry():
 def test_static_screen_dispatches_to_lane_plugin(tmp_path: Path) -> None:
     register_plugin(_ScreeningPlugin())
     findings = _plugin_static_screen_findings(
-        submission_root=tmp_path, repo_pack="t__pack", mode="miner"
+        submission_root=tmp_path, subnet_pack="t__pack", mode="miner"
     )
     assert findings == ["custom subnet finding"]
 
@@ -74,13 +74,16 @@ def test_static_screen_noop_for_unknown_or_missing_lane(tmp_path: Path) -> None:
     # An unregistered pack resolves to no plugin -> no subnet-specific findings.
     assert (
         _plugin_static_screen_findings(
-            submission_root=tmp_path, repo_pack="nope__pack", mode="miner"
+            submission_root=tmp_path, subnet_pack="nope__pack", mode="miner"
         )
         == []
     )
-    # No repo_pack -> no dispatch at all.
+    # No subnet_pack -> no dispatch at all.
     assert (
-        _plugin_static_screen_findings(submission_root=tmp_path, repo_pack=None, mode="miner") == []
+        _plugin_static_screen_findings(
+            submission_root=tmp_path, subnet_pack=None, mode="miner"
+        )
+        == []
     )
 
 
@@ -89,6 +92,6 @@ def test_sn60_lane_runs_its_static_screen(tmp_path: Path) -> None:
     # answer-key token is rejected by SN60's own static_screen through the dispatch.
     (tmp_path / "agent.py").write_text("KNOWN = 'curated-highs-only'\n", encoding="utf-8")
     findings = _plugin_static_screen_findings(
-        submission_root=tmp_path, repo_pack="sn60__bitsec", mode="miner"
+        submission_root=tmp_path, subnet_pack="sn60__bitsec", mode="miner"
     )
     assert any(getattr(f, "rule_id", None) == "sn60.answer_key_token" for f in findings)
