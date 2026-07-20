@@ -15,7 +15,7 @@ from kata_sn60.sn60_bitsec import (
     Sn60ReplicaResult,
     Sn60SandboxSource,
     build_bitsec_execution_command,
-    build_cached_king_hooks,
+    build_cached_variant_hooks,
     build_default_evaluation_hook,
     build_default_execution_hook,
     ensure_internal_agent_network,
@@ -1601,9 +1601,9 @@ def test_cached_king_scoreboard_saves_are_serialized(
 
     monkeypatch.setattr("kata_sn60.sn60_bitsec.save_king_scoreboard", fake_save)
 
-    _execute, evaluate = build_cached_king_hooks(
+    _execute, evaluate = build_cached_variant_hooks(
         scoreboard_path=scoreboard,
-        king_hash="king-sha",
+        artifact_hash="king-sha",
         benchmark_version="benchmark-version",
         base_execution_hook=lambda _context: {"success": True, "report": {}},
         base_evaluation_hook=lambda _context, _report: {

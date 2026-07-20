@@ -184,3 +184,69 @@ def test_sn60_plugin_scores_rank_and_beat_king_match_engine(tmp_path: Path) -> N
     assert cards["cand-c"].metrics["true_positives"] == 3
     assert cards["cand-c"].passed is True
     assert cards["cand-c"].payload is not None
+
+
+def test_candidate_cache_reuses_scored_projects_on_resume(tmp_path: Path) -> None:
+    # A durable candidate scoreboard lets an interrupted challenge that resumes
+    # during the candidate phase skip re-running (and re-paying for) candidate
+    # projects it already scored.
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = _write_benchmark(sandbox_root)
+    exec_calls = {"n": 0}
+    base_exec, base_eval = _detection_hooks()
+
+    def counting_exec(context):
+        exec_calls["n"] += 1
+        return base_exec(context)
+
+    plugin = Sn60BitsecPlugin(execution_hook=counting_exec, evaluation_hook=base_eval)
+    cache = tmp_path / "candidate_scoreboard.json"
+    problems = plugin.sample_problems(
+        seed="challenge-1",
+        config={
+            "sandbox_root": str(sandbox_root),
+            "benchmark_file": str(benchmark_path),
+            "sandbox_commit": "commit-x",
+            "project_keys": ["project-alpha"],
+            "replicas_per_project": 1,
+            "candidate_challenge_cache_path": str(cache),
+        },
+    )
+    assert problems.candidate_cache_path == str(cache)
+
+    bundle = tmp_path / "cand"
+    _write_detection_bundle(bundle, 0.5)
+
+    # First run: the candidate executes and records to the scoreboard.
+    _score(plugin, agent_root=bundle, problems=problems, tmp_path=tmp_path, label="cand-a")
+    first = exec_calls["n"]
+    assert first >= 1
+    assert cache.exists()
+
+    # Second run (same candidate + same scoreboard = a resume): served from the
+    # cache, so no further base executions happen.
+    _score(
+        plugin,
+        agent_root=bundle,
+        problems=problems,
+        tmp_path=tmp_path / "second",
+        label="cand-a",
+    )
+    assert exec_calls["n"] == first
+
+
+def test_candidate_cache_absent_by_default(tmp_path: Path) -> None:
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = _write_benchmark(sandbox_root)
+    plugin = _plugin()
+    problems = plugin.sample_problems(
+        seed="challenge-1",
+        config={
+            "sandbox_root": str(sandbox_root),
+            "benchmark_file": str(benchmark_path),
+            "sandbox_commit": "commit-x",
+            "project_keys": ["project-alpha"],
+            "replicas_per_project": 1,
+        },
+    )
+    assert problems.candidate_cache_path is None

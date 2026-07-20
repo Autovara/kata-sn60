@@ -29,7 +29,7 @@ from kata_sn60.sn60_bitsec import (
     Sn60SandboxSource,
     Sn60VariantSummary,
     benchmark_version_key,
-    build_cached_king_hooks,
+    build_cached_variant_hooks,
     build_default_evaluation_hook,
     build_default_execution_hook,
     hash_bundle_root,
@@ -61,6 +61,11 @@ class Sn60Problems:
     replicas_per_project: int
     run_id: str
     challenge_cache_path: str | None = None
+    # Durable candidate scoreboard: when set, the candidate's per-project runs are
+    # cached the same way as the king's, so an interrupted challenge that resumes
+    # during the candidate phase does not re-run (and re-pay for) candidate
+    # projects it already scored. Cleared per round by the caller.
+    candidate_cache_path: str | None = None
     # One passed execution screener per candidate may be reused as the first
     # scored replica. Entries are created only after the real TEE execution has
     # passed report validation for the current bundle and sampled project.
@@ -156,6 +161,7 @@ class Sn60BitsecPlugin(SubnetPlugin):
             replicas_per_project=replicas_per_project,
             run_id=seed,
             challenge_cache_path=config.get("challenge_cache_path"),
+            candidate_cache_path=config.get("candidate_challenge_cache_path"),
         )
 
     def benchmark_identity(self, problems: Sn60Problems) -> str:
@@ -176,10 +182,19 @@ class Sn60BitsecPlugin(SubnetPlugin):
         # "king"/"candidate" so execution/evaluation hooks see the same variant as the
         # legacy duel path.
         variant_name = "king" if label == "king" else "candidate"
-        if label == "king" and problems.challenge_cache_path:
-            execution_hook, evaluation_hook = build_cached_king_hooks(
-                scoreboard_path=problems.challenge_cache_path,
-                king_hash=hash_bundle_root(artifact_root),
+        # Route the variant through its durable scoreboard when one is configured,
+        # so an interrupted challenge resumes cached projects instead of re-running
+        # them. The king and candidate use separate scoreboard files, each keyed by
+        # its own bundle hash.
+        cache_path = (
+            problems.challenge_cache_path
+            if label == "king"
+            else problems.candidate_cache_path
+        )
+        if cache_path:
+            execution_hook, evaluation_hook = build_cached_variant_hooks(
+                scoreboard_path=cache_path,
+                artifact_hash=hash_bundle_root(artifact_root),
                 benchmark_version=benchmark_version_key(
                     source.scorer_version, source.benchmark_sha256
                 ),

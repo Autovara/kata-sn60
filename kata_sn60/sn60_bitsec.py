@@ -299,9 +299,9 @@ def run_sn60_bitsec_duel(
     king_execution_hook = resolved_execution_hook
     king_evaluation_hook = resolved_evaluation_hook
     if king_scoreboard_path:
-        king_execution_hook, king_evaluation_hook = build_cached_king_hooks(
+        king_execution_hook, king_evaluation_hook = build_cached_variant_hooks(
             scoreboard_path=king_scoreboard_path,
-            king_hash=king_hash,
+            artifact_hash=king_hash,
             benchmark_version=benchmark_version_key(source.scorer_version, source.benchmark_sha256),
             base_execution_hook=resolved_execution_hook,
             base_evaluation_hook=resolved_evaluation_hook,
@@ -461,24 +461,28 @@ def score_variant_on_projects(
     return replica_results
 
 
-def build_cached_king_hooks(
+def build_cached_variant_hooks(
     *,
     scoreboard_path: str | Path,
-    king_hash: str,
+    artifact_hash: str,
     benchmark_version: str,
     base_execution_hook: Sn60ExecutionHook,
     base_evaluation_hook: Sn60EvaluationHook,
 ) -> tuple[Sn60ExecutionHook, Sn60EvaluationHook]:
-    """Wrap the king's hooks so cached projects skip inference entirely.
+    """Wrap a variant's hooks so cached projects skip inference entirely.
 
-    On a cache hit both hooks return the stored payloads (no Docker exec, no
-    scorer call); the surrounding scoring path still materializes identical
-    ``report.json`` / ``evaluation.json`` artifacts in the run. On a miss the
-    base hooks run and the payloads are recorded for future challenges.
+    Works for either variant: pass the king's bundle hash to cache the king, or
+    the candidate's to cache the candidate. Each variant uses its own scoreboard
+    file, keyed by ``(artifact_hash, benchmark_version)`` so a changed bundle or
+    benchmark self-invalidates. On a cache hit both hooks return the stored
+    payloads (no Docker exec, no scorer call); the surrounding scoring path still
+    materializes identical ``report.json`` / ``evaluation.json`` artifacts in the
+    run. On a miss the base hooks run and the payloads are recorded so an
+    interrupted challenge can resume without re-running them.
     """
     board: KingScoreboard = load_king_scoreboard(
         scoreboard_path,
-        king_hash=king_hash,
+        king_hash=artifact_hash,
         benchmark_version=benchmark_version,
     )
     board_lock = threading.Lock()
