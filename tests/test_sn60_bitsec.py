@@ -716,17 +716,15 @@ def test_malformed_agent_report_is_recorded_failure_not_a_crash(
     assert good == {"success": True, "report": {}}
 
 
-def test_project_passes_uses_successful_replica_threshold() -> None:
-    # The two-thirds majority is now taken over the SUCCESSFUL replicas so that
-    # invalid (infra-failed) replicas never fail a project by inflating the
-    # denominator.
-    assert project_passes(pass_count=2, successful_runs=3)
-    assert project_passes(pass_count=3, successful_runs=3)
-    assert not project_passes(pass_count=1, successful_runs=3)
-    assert not project_passes(pass_count=0, successful_runs=3)
-    assert project_passes(pass_count=1, successful_runs=1)
-    assert not project_passes(pass_count=1, successful_runs=2)
-    assert not project_passes(pass_count=0, successful_runs=0)
+def test_project_passes_uses_total_replica_threshold() -> None:
+    # The two-thirds majority is taken over the TOTAL replicas, so an invalid replica
+    # counts as a non-pass (a project must pass on 2 of its 3 replicas).
+    assert project_passes(pass_count=2, total_runs=3)  # PASS/PASS/FAIL or PASS/PASS/invalid
+    assert project_passes(pass_count=3, total_runs=3)
+    assert not project_passes(pass_count=1, total_runs=3)  # PASS/invalid/invalid -> fail
+    assert not project_passes(pass_count=0, total_runs=3)
+    assert not project_passes(pass_count=1, total_runs=2)
+    assert not project_passes(pass_count=0, total_runs=0)
 
 
 def test_resolve_sn60_sandbox_source_rejects_mismatched_pinned_commit(
@@ -1253,9 +1251,10 @@ def test_summarize_project_uses_best_of_successful_replicas() -> None:
     assert project.invalid_runs == 1
 
 
-def test_project_pass_not_failed_by_invalid_replicas() -> None:
-    # One successful PASS plus two invalid replicas: the project passes on the
-    # successful-replica majority (1 of 1) instead of failing on the old 1-of-3.
+def test_project_pass_needs_two_of_three_total_replicas() -> None:
+    # One PASS + two invalid replicas: 1 of 3 total is below the 2/3 gate, so the
+    # project does NOT pass (invalid replicas count as non-passes). Its best-of score
+    # still comes from the successful replica -- invalid runs lower the pass, not the score.
     project = summarize_project(
         project_key="p",
         replica_results=[
@@ -1264,9 +1263,21 @@ def test_project_pass_not_failed_by_invalid_replicas() -> None:
             _scored_replica("p", true_positives=0, total_expected=10, total_found=0, status="error"),
         ],
     )
-    assert project.passed is True
+    assert project.passed is False
     assert project.pass_count == 1
     assert project.successful_runs == 1
+    assert project.true_positives == 10  # best-of: the successful replica's score stands
+
+    # Two PASS + one invalid: 2 of 3 total -> passes (invalid tolerated when 2 pass).
+    project2 = summarize_project(
+        project_key="q",
+        replica_results=[
+            _scored_replica("q", true_positives=10, total_expected=10, total_found=10, result="PASS"),
+            _scored_replica("q", true_positives=10, total_expected=10, total_found=10, result="PASS"),
+            _scored_replica("q", true_positives=0, total_expected=10, total_found=0, status="error"),
+        ],
+    )
+    assert project2.passed is True
 
 
 def test_flaked_candidate_still_outranks_a_weaker_king() -> None:

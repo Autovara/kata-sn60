@@ -241,7 +241,7 @@ def sn60_codebase_pass_count(replica_results: list[Sn60ReplicaResult]) -> int:
         project_replicas = [r for r in replica_results if r.project_key == project_key]
         successful = [r for r in project_replicas if r.evaluation_status == "success"]
         pass_count = sum(1 for r in successful if r.result == "PASS")
-        if project_passes(pass_count=pass_count, successful_runs=len(successful)):
+        if project_passes(pass_count=pass_count, total_runs=len(project_replicas)):
             passes += 1
     return passes
 
@@ -783,7 +783,7 @@ def summarize_project(
         successful_runs=len(successful),
         invalid_runs=len(replica_results) - len(successful),
         pass_count=pass_count,
-        passed=project_passes(pass_count=pass_count, successful_runs=len(successful)),
+        passed=project_passes(pass_count=pass_count, total_runs=len(replica_results)),
         average_detection_rate=fmean(detection_rates) if detection_rates else 0.0,
         true_positives=true_positives,
         total_expected=total_expected,
@@ -793,18 +793,19 @@ def summarize_project(
     )
 
 
-def project_passes(*, pass_count: int, successful_runs: int) -> bool:
-    """Codebase-level binary PASS over the SUCCESSFUL replicas.
+def project_passes(*, pass_count: int, total_runs: int) -> bool:
+    """Codebase-level binary PASS: at least two-thirds of the project's replicas passed.
 
-    Production uses 3 replicas per selected project, so 2/3 passes. Invalid
-    (infra-failed) replicas are excluded from the denominator: a transient
-    failure must never turn a project a variant would otherwise pass into a fail.
-    Infra flakiness is accounted for only via invalid_runs -- the low-priority
-    promotion-rank tiebreaker -- never the pass count.
+    The denominator is the TOTAL replicas (production runs 3), so an invalid
+    (infra-failed) replica counts as a non-pass -- a project must pass on 2 of its
+    3 replicas, not merely 2 of whatever survived. So PASS/PASS/FAIL and
+    PASS/PASS/invalid both pass (2 of 3), while PASS/invalid/invalid does not (1 of 3).
+    Infra flakiness therefore lowers the pass count directly, not only the
+    ``invalid_runs`` tiebreaker.
     """
-    if successful_runs <= 0:
+    if total_runs <= 0:
         return False
-    return pass_count * 3 >= successful_runs * 2
+    return pass_count * 3 >= total_runs * 2
 
 
 def build_replica_result(
