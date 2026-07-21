@@ -93,7 +93,7 @@ def test_llm_review_invokes_codex_and_adds_review_finding(
     assert timeout_seconds == 180
     assert cwd == tmp_path.resolve()
     assert "Return JSON only" in prompt
-    assert "only runs after deterministic screening has already marked the PR suspicious" in prompt
+    assert "runs after deterministic screening already marked the PR suspicious" in prompt
     assert "Use the Kata submission rules below" in prompt
     assert "accept as much honest generic analysis as possible" in prompt
     assert "The miner must not hardcode benchmark project IDs" in prompt
@@ -117,6 +117,7 @@ def test_llm_review_invokes_codex_and_adds_review_finding(
 
 def test_llm_review_is_not_called_for_clean_decision(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("KATA_SCREENING_LLM_REVIEW", "1")
+    monkeypatch.delenv("KATA_SCREENING_FORCE_LLM_REVIEW", raising=False)
 
     def fail_runner(
         _command: list[str],
@@ -326,3 +327,103 @@ def test_call_openai_chat_api_builds_request_and_parses_content(monkeypatch) -> 
     assert captured["body"]["model"] == "gpt-5.4"
     assert captured["body"]["messages"][0]["content"] == "PROMPT-TEXT"
     assert "pass" in content
+
+
+def test_llm_review_forced_runs_on_clean_submission(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("KATA_SCREENING_LLM_REVIEW", "1")
+    monkeypatch.setenv("KATA_SCREENING_FORCE_LLM_REVIEW", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    def missing_codex(_command, _prompt, _timeout, _cwd) -> LlmCommandResult:
+        raise FileNotFoundError("no codex")
+
+    def fake_api(_prompt: str, _model: str, _timeout: int) -> str:
+        return (
+            '{"verdict":"suspicious","confidence":0.7,'
+            '"evidence":[{"line":3,"reason":"looks copied"}],"summary":"maybe copied"}'
+        )
+
+    # Clean decision (no deterministic review reasons), but forced -> LLM runs.
+    findings, notes = review_suspicious_submission_with_llm(
+        submission_root=tmp_path,
+        bundle_files={"agent.py": "x"},
+        decision=ScreeningDecision(status="pass"),
+        runner=missing_codex,
+        api_runner=fake_api,
+    )
+    assert any(f.rule_id == "llm_review.suspicious" for f in findings)
+    assert notes[0].rule_id == "llm_review.result"
+
+
+def test_llm_review_forced_pass_adds_no_finding(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("KATA_SCREENING_LLM_REVIEW", "1")
+    monkeypatch.setenv("KATA_SCREENING_FORCE_LLM_REVIEW", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    def missing_codex(_command, _prompt, _timeout, _cwd) -> LlmCommandResult:
+        raise FileNotFoundError("no codex")
+
+    def fake_api(_prompt: str, _model: str, _timeout: int) -> str:
+        return json.dumps(
+            {"verdict": "pass", "confidence": 0.9, "evidence": [], "summary": "clean analyzer"}
+        )
+
+    findings, notes = review_suspicious_submission_with_llm(
+        submission_root=tmp_path,
+        bundle_files={"agent.py": "x"},
+        decision=ScreeningDecision(status="pass"),
+        runner=missing_codex,
+        api_runner=fake_api,
+    )
+    # pass -> no review finding -> screening stays clean -> pending
+    assert findings == []
+    assert "pass" in notes[0].reason
+
+
+def test_llm_review_forced_error_keeps_review(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("KATA_SCREENING_LLM_REVIEW", "1")
+    monkeypatch.setenv("KATA_SCREENING_FORCE_LLM_REVIEW", "1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)  # no fallback -> error
+
+    def missing_codex(_command, _prompt, _timeout, _cwd) -> LlmCommandResult:
+        raise FileNotFoundError("no codex")
+
+    findings, notes = review_suspicious_submission_with_llm(
+        submission_root=tmp_path,
+        bundle_files={"agent.py": "x"},
+        decision=ScreeningDecision(status="pass"),
+        runner=missing_codex,
+    )
+    # Both codex and API unavailable -> error verdict -> forced -> held for review.
+    assert findings and findings[0].rule_id == "llm_review.error"
+
+
+def test_llm_review_not_forced_skips_clean_submission(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("KATA_SCREENING_LLM_REVIEW", "1")
+    monkeypatch.delenv("KATA_SCREENING_FORCE_LLM_REVIEW", raising=False)
+
+    def must_not_run(_command, _prompt, _timeout, _cwd) -> LlmCommandResult:
+        raise AssertionError("LLM must not run on a clean, unforced submission")
+
+    def api_must_not_run(_prompt: str, _model: str, _timeout: int) -> str:
+        raise AssertionError("API must not run on a clean, unforced submission")
+
+    findings, notes = review_suspicious_submission_with_llm(
+        submission_root=tmp_path,
+        bundle_files={"agent.py": "x"},
+        decision=ScreeningDecision(status="pass"),
+        runner=must_not_run,
+        api_runner=api_must_not_run,
+    )
+    assert findings == []
+    assert notes == []
+
+
+def test_forced_clean_review_prompt_uses_maintainer_framing() -> None:
+    prompt = llm_review.build_llm_review_prompt(
+        bundle_files={"agent.py": "def agent_main():\n    return {}\n"},
+        decision=ScreeningDecision(status="pass"),
+    )
+    assert "maintainer requested a full integrity review" in prompt
+    assert "none (maintainer-requested full review)" in prompt
+    assert "Kata submission rules:" in prompt

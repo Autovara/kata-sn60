@@ -16,6 +16,10 @@ from typing import Any, Callable, Literal
 from kata.screening.models import ScreeningDecision, ScreeningFinding
 
 LLM_REVIEW_ENV = "KATA_SCREENING_LLM_REVIEW"
+# Force the LLM review to run even when deterministic screening raised no flag. Set
+# per-invocation by the manual ``/kata review`` command (not by automated intake), so
+# a maintainer's explicit review always gets an LLM verdict.
+LLM_FORCE_REVIEW_ENV = "KATA_SCREENING_FORCE_LLM_REVIEW"
 LLM_MODEL_ENV = "KATA_SCREENING_LLM_MODEL"
 LLM_CODEX_BIN_ENV = "KATA_SCREENING_LLM_CODEX_BIN"
 LLM_TIMEOUT_ENV = "KATA_SCREENING_LLM_TIMEOUT_SECONDS"
@@ -84,6 +88,23 @@ def llm_review_enabled(value: bool | None = None) -> bool:
     }
 
 
+def force_llm_review_requested(value: bool | None = None) -> bool:
+    """Whether this screening was asked to run the LLM review unconditionally.
+
+    Driven by ``KATA_SCREENING_FORCE_LLM_REVIEW`` (set only by the manual
+    ``/kata review`` command), so automated intake keeps its cost-bounded behavior
+    of running the LLM only when deterministic screening already flagged the PR.
+    """
+    if value is not None:
+        return value
+    return os.environ.get(LLM_FORCE_REVIEW_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def review_suspicious_submission_with_llm(
     *,
     submission_root: Path,
@@ -92,13 +113,21 @@ def review_suspicious_submission_with_llm(
     runner: LlmRunner | None = None,
     api_runner: LlmApiRunner | None = None,
     enabled: bool | None = None,
+    force: bool | None = None,
 ) -> tuple[list[ScreeningFinding], list[ScreeningFinding]]:
     """Return additional review findings and notes from optional LLM review.
 
-    This is deliberately a second-stage review aid. It is never called for clean
-    submissions and never converts a PR into a hard reject by itself.
+    Normally a second-stage aid: it runs only when deterministic screening already
+    raised a review flag, and never converts a PR into a hard reject by itself. When
+    ``force`` is set (the manual ``/kata review`` command), it runs even on an
+    otherwise-clean submission -- and if it cannot reach a verdict (both the codex CLI
+    and the API fallback fail), it holds the PR for manual review rather than passing
+    it, so an errored review is never silently treated as clean.
     """
-    if not llm_review_enabled(enabled) or not decision.review_reasons:
+    forced = force_llm_review_requested(force)
+    if not llm_review_enabled(enabled):
+        return [], []
+    if not decision.review_reasons and not forced:
         return [], []
     result = run_codex_llm_review(
         submission_root=submission_root,
@@ -114,6 +143,10 @@ def review_suspicious_submission_with_llm(
         notes.append(note)
     notes.extend(llm_review_evidence_notes(result))
     if result.verdict in {"suspicious", "reject"}:
+        findings.append(llm_review_finding(result))
+    elif forced and result.verdict == "error":
+        # A maintainer-forced review that could not complete stays in manual review
+        # (fail-safe): never auto-pass a PR whose review errored out.
         findings.append(llm_review_finding(result))
     return findings, notes
 
@@ -331,10 +364,27 @@ def build_llm_review_prompt(
             "answer text back in `summary`; explain the issue using submitted-code "
             "line evidence and plain behavior instead.\n\n"
         )
+    if evidence:
+        context_line = (
+            "This LLM review runs after deterministic screening already marked the "
+            "PR suspicious. "
+        )
+        evidence_line = (
+            "Deterministic screening evidence:\n" + json.dumps(evidence, indent=2) + "\n\n"
+        )
+    else:
+        context_line = (
+            "A maintainer requested a full integrity review of this submission. "
+            "Deterministic screening raised no flag, so judge the submitted source "
+            "directly against the rules below. "
+        )
+        evidence_line = (
+            "Deterministic screening evidence: none (maintainer-requested full review).\n\n"
+        )
     return (
         "Review this Kata SN60 miner submission for screening integrity.\n"
-        "This optional LLM review only runs after deterministic screening has "
-        "already marked the PR suspicious. Use the Kata submission rules below. "
+        f"{context_line}"
+        "Use the Kata submission rules below. "
         "Be careful and fair: accept as much honest generic analysis as possible, "
         "but flag clear cheating, replay, copy-cat, or secret-leaking code.\n\n"
         "Kata submission rules:\n"
@@ -385,8 +435,7 @@ def build_llm_review_prompt(
         '  "evidence": [{"line": 0, "reason": "..."}],\n'
         '  "summary": "..."\n'
         "}\n\n"
-        "Deterministic screening evidence:\n"
-        f"{json.dumps(evidence, indent=2)}\n\n"
+        f"{evidence_line}"
         f"{benchmark_section}"
         "Submitted source files:\n"
         f"{sources}\n"
