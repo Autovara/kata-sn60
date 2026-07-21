@@ -32,7 +32,6 @@ from kata_sn60.king_cache import (
     save_king_scoreboard,
 )
 
-SN60_BITSEC_EVALUATOR_ID = "sn60_bitsec"
 DEFAULT_SN60_DUEL_SCHEMA_VERSION = 2
 DEFAULT_SANDBOX_PROXY_NETWORK = "bitsec-net"
 DEFAULT_SANDBOX_PROXY_URL = "http://localhost:8087"
@@ -673,6 +672,12 @@ def write_sn60_duel_summary(path: Path, summary: Sn60DuelSummary) -> None:
     write_json(path, asdict(summary))
 
 
+def sn60_f1_score(precision: float, recall: float) -> float:
+    """Harmonic mean of precision and recall (0.0 when both are 0)."""
+    total = precision + recall
+    return 2 * precision * recall / total if total > 0 else 0.0
+
+
 def summarize_variant(
     *,
     variant_name: str,
@@ -702,11 +707,7 @@ def summarize_variant(
     total_found = sum(project.total_found for project in project_summaries)
     precision = true_positives / total_found if total_found else 0.0
     aggregated_score = true_positives / total_expected if total_expected else 0.0
-    f1_score = (
-        2 * precision * aggregated_score / (precision + aggregated_score)
-        if precision + aggregated_score > 0
-        else 0.0
-    )
+    f1_score = sn60_f1_score(precision, aggregated_score)
     codebase_pass_count = sum(1 for project in project_summaries if project.passed)
     # Looser count: a project counts if any single replica passed, not just the
     # 2/3 majority. Used as the "projects passed" rank signal / display; the strict
@@ -772,11 +773,7 @@ def summarize_project(
         )
     detection_rate = true_positives / total_expected if total_expected else 0.0
     precision = true_positives / total_found if total_found else 0.0
-    f1_score = (
-        2 * precision * detection_rate / (precision + detection_rate)
-        if precision + detection_rate > 0
-        else 0.0
-    )
+    f1_score = sn60_f1_score(precision, detection_rate)
     return Sn60ProjectAggregate(
         project_key=project_key,
         replica_count=len(replica_results),

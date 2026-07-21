@@ -76,7 +76,7 @@ def screen_sn60_static_bundle(bundle_files: dict[str, str]) -> list[ScreeningFin
     # findings -- it would only burn one real room job to score 0. Reject it here at
     # static screening (source-only, no inference) instead of admitting it to a challenge.
     # When a key IS supplied it must be non-trivial ciphertext for the room.
-    if _tee_execution_enabled():
+    if tee_execution_enabled():
         sealed_key = str(bundle_files.get(SEALED_KEY_FILENAME) or "").strip()
         if not sealed_key:
             findings.append(
@@ -205,10 +205,6 @@ def screen_sn60_static_bundle(bundle_files: dict[str, str]) -> list[ScreeningFin
                 )
             )
     return dedupe_findings(findings)
-
-
-def _tee_execution_enabled() -> bool:
-    return tee_execution_enabled()
 
 
 def validate_sn60_static_screening(candidate_root: str | Path) -> list[str]:

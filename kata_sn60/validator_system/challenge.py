@@ -37,15 +37,13 @@ from kata_sn60.sn60_bitsec import (
     hash_bundle_root,
     resolve_sn60_sandbox_source,
     score_variant_on_projects,
+    sn60_f1_score,
     summarize_variant,
     validate_sn60_project_keys,
 )
 from kata_sn60.validator_system.screening import (
     Sn60ScreeningResult,
     run_sn60_screening,
-    screening_result_payload,
-    sn60_screening_freshness_fingerprint,
-    validate_sn60_screening_report,
 )
 
 SN60_MINER_LANE_ID = "sn60__bitsec"
@@ -94,42 +92,6 @@ class Sn60PromotionDecision:
     promotion_ready: bool
     final_winner: str
     reason: str
-
-
-def summarize_candidate_finding_quality(
-    duel_summary: Sn60DuelSummary,
-) -> dict[str, object]:
-    """Per-problem findings note for contributor feedback (informational only).
-
-    A problem counts as "produced findings" when at least one of its candidate
-    replicas returned a screening-valid report (a non-empty high/critical finding
-    with a description and source location). This never gates the challenge — the
-    duel already scores empty/unparseable output as 0 for that problem and keeps
-    going — it only lets the PR comment say how many problems yielded findings.
-    """
-    produced_findings: dict[str, bool] = {}
-    for replica in duel_summary.candidate.replica_results:
-        try:
-            report = json.loads(Path(replica.report_path).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            report = {"success": False}
-        if not isinstance(report, dict):
-            report = {"success": False}
-        is_valid = not validate_sn60_screening_report(report)
-        key = replica.project_key
-        produced_findings[key] = produced_findings.get(key, False) or is_valid
-    total = len(produced_findings)
-    with_findings = sum(1 for valid in produced_findings.values() if valid)
-    return {
-        "total_problems": total,
-        "problems_with_findings": with_findings,
-        "problems_without_findings": total - with_findings,
-        "per_problem": [
-            {"project_key": key, "produced_findings": valid}
-            for key, valid in produced_findings.items()
-        ],
-    }
-
 
 
 def sn60_duel_to_challenge_summary(
@@ -230,54 +192,6 @@ def failed_candidate_variant_summary(
         f1_score=0.0,
         project_summaries=[],
         replica_results=[],
-    )
-
-
-def build_sn60_screening_failure_summary(
-    *,
-    king_artifact_path: str,
-    candidate_artifact_path: str,
-    project_keys: list[str],
-    lane_id: str,
-    screening: Sn60ScreeningResult,
-) -> ChallengeSummary:
-    king_root = Path(king_artifact_path).expanduser().resolve()
-    candidate_root = Path(candidate_artifact_path).expanduser().resolve()
-    king_hash = hash_bundle_root(king_root)
-    freshness_fingerprint = sn60_screening_freshness_fingerprint(
-        king_artifact_hash=king_hash,
-        screening_result=screening,
-    )
-    reason = "; ".join(screening.reasons) if screening.reasons else "unknown screening failure"
-    return ChallengeSummary(
-        schema_version=CHALLENGE_SUMMARY_SCHEMA_VERSION,
-        run_id=screening.run_id,
-        manifest_path=screening.result_path,
-        mode=SN60_MINER_MODE,
-        evaluator_version=(
-            f"{screening.sandbox_source.scorer_version}"
-            f"@{short_hash(screening.sandbox_source.sandbox_commit)}"
-        ),
-        validator_model=SN60_VALIDATOR_MODEL,
-        king_artifact=str(king_root),
-        candidate_artifact=str(candidate_root),
-        king_artifact_hash=king_hash,
-        candidate_artifact_hash=screening.artifact_hash,
-        primary_pool_fingerprint=freshness_fingerprint,
-        created_at=screening.created_at,
-        primary=ChallengePoolSummary(
-            project_keys=list(project_keys),
-            run_summary_path=screening.result_path,
-            total_task_weight=1.0,
-            variant_successes={"king": 0, "candidate": 0},
-            variant_invalid_runs={"king": 0, "candidate": 1},
-            variant_scores={"king": 0.0, "candidate": 0.0},
-            variant_detection_scores={"king": 0.0, "candidate": 0.0},
-            candidate_beats_king=False,
-            candidate_score_delta=0.0,
-        ),
-        promotion_ready=False,
-        promotion_reason=f"{lane_id}: candidate failed SN60 screening: {reason}",
     )
 
 
@@ -435,7 +349,12 @@ def build_sn60_challenge_id() -> str:
     return f"sn60-challenge-{timestamp}-{secrets.token_hex(3)}"
 
 
-def write_sn60_challenge_result(path: Path, result: Sn60ChallengeResult) -> None:
+def _write_sn60_result_json(path: Path, result: object) -> None:
+    """Serialize an SN60 result dataclass (challenge or baseline) to JSON.
+
+    Both results carry ``replicas_per_project`` and share the exact same on-disk
+    shape and annotations, so the serialization lives in one place.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = asdict(result)
     payload["validator_replica_count"] = 1
@@ -445,18 +364,14 @@ def write_sn60_challenge_result(path: Path, result: Sn60ChallengeResult) -> None
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def write_sn60_challenge_result(path: Path, result: Sn60ChallengeResult) -> None:
+    _write_sn60_result_json(path, result)
 
 
 def write_sn60_baseline_summary(path: Path, result: Sn60BaselineResult) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = asdict(result)
-    payload["validator_replica_count"] = 1
-    payload["runs_per_project"] = result.replicas_per_project
-    payload["project_pass_threshold"] = project_pass_threshold_label(result.replicas_per_project)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    _write_sn60_result_json(path, result)
 
 
 def _sn60_variant_progress(summary: Sn60VariantSummary) -> dict[str, object]:
@@ -535,7 +450,7 @@ def _apply_running_metrics(
     )
     detection = acc["tp"] / acc["expected"] if acc["expected"] else 0.0
     precision = acc["tp"] / acc["found"] if acc["found"] else 0.0
-    f1 = 2 * precision * detection / (precision + detection) if (precision + detection) else 0.0
+    f1 = sn60_f1_score(precision, detection)
     target["aggregated_score"] = detection
     target["precision"] = precision
     target["f1_score"] = f1
@@ -544,8 +459,6 @@ def _apply_running_metrics(
     target["total_found"] = acc["found"]
     target["invalid_runs"] = acc["invalid"]
     target["projects"] = list(acc["projects"])
-
-
 
 
 def run_sn60_baseline_only(
@@ -687,74 +600,6 @@ def record_sn60_lane_provenance(
     return challenge_path, promotion_path
 
 
-def record_sn60_screening_failure_provenance(
-    *,
-    lane_id: str,
-    candidate_submission_id: str,
-    king_artifact_path: str,
-    project_keys: list[str],
-    replicas_per_project: int,
-    screening: Sn60ScreeningResult,
-    public_root: str | None = None,
-) -> tuple[Path, Path]:
-    king_hash = hash_bundle_root(Path(king_artifact_path).expanduser().resolve())
-    freshness_fingerprint = sn60_screening_freshness_fingerprint(
-        king_artifact_hash=king_hash,
-        screening_result=screening,
-    )
-    screening_payload = screening_result_payload(screening)
-    reason = "; ".join(screening.reasons) if screening.reasons else "unknown screening failure"
-    record_sn60_benchmark_snapshot(
-        lane_id=lane_id,
-        sandbox_source=screening.sandbox_source,
-        project_keys=list(project_keys),
-        public_root=public_root,
-    )
-    challenge_path = write_challenge_state(
-        lane_id,
-        ChallengeState(
-            schema_version=CHALLENGE_STATE_SCHEMA_VERSION,
-            candidate_submission_id=candidate_submission_id,
-            candidate_artifact_hash=screening.artifact_hash,
-            king_artifact_hash=king_hash,
-            screening_result=screening_payload,
-            selected_project_keys=list(project_keys),
-            validator_replica_count=1,
-            run_ids=[screening.run_id],
-            freshness_fingerprint=freshness_fingerprint,
-            updated_at=datetime.now(UTC).isoformat(),
-        ),
-        public_root=public_root,
-    )
-    promotion_path = write_promotion_record(
-        lane_id,
-        PromotionRecord(
-            schema_version=PROMOTION_RECORD_SCHEMA_VERSION,
-            final_metrics={
-                "run_id": screening.run_id,
-                "promotion_ready": False,
-                "promotion_reason": f"candidate failed SN60 screening: {reason}",
-                "screening_status": screening.status,
-                "screening_stage": screening.stage,
-                "sandbox_commit": screening.sandbox_source.sandbox_commit,
-                "benchmark_sha256": screening.sandbox_source.benchmark_sha256,
-                "scorer_version": screening.sandbox_source.scorer_version,
-                "validator_replica_count": 1,
-                "runs_per_project": replicas_per_project,
-                "project_pass_threshold": project_pass_threshold_label(replicas_per_project),
-            },
-            local_replica_scores={"king": [], "candidate": []},
-            pass_counts={"king": 0, "candidate": 0},
-            true_positives={"king": 0, "candidate": 0},
-            invalid_runs={"king": 0, "candidate": 1},
-            final_winner="king",
-            recorded_at=datetime.now(UTC).isoformat(),
-        ),
-        public_root=public_root,
-    )
-    return challenge_path, promotion_path
-
-
 def sn60_final_metrics(
     duel_summary: Sn60DuelSummary,
     decision: Sn60PromotionDecision,
@@ -853,7 +698,6 @@ def sn60_evaluator_version(duel_summary: Sn60DuelSummary) -> str:
     )
 
 
-
 def load_challenge_summary(path: str) -> ChallengeSummary:
     payload = json.loads(Path(path).expanduser().resolve().read_text(encoding="utf-8"))
     return ChallengeSummary(
@@ -898,30 +742,6 @@ def parse_challenge_pool(payload: dict[str, object]) -> ChallengePoolSummary:
         ),
         competition_mode=str(payload.get("competition_mode") or "king_duel"),
     )
-
-
-def render_pool(pool: ChallengePoolSummary) -> list[str]:
-    lines = [
-        f"- Projects: {', '.join(pool.project_keys)}",
-        f"- Run summary: `{pool.run_summary_path}`",
-        f"- Total task weight: {pool.total_task_weight:g}",
-    ]
-    for variant_name in ("king", "candidate"):
-        lines.append(f"- {variant_name} passed: {pool.variant_successes.get(variant_name, 0)}")
-        lines.append(
-            f"- {variant_name} invalid runs: {pool.variant_invalid_runs.get(variant_name, 0)}"
-        )
-        lines.append(
-            f"- {variant_name} SN60 pass score: {pool.variant_scores.get(variant_name, 0.0):.2f}"
-        )
-        if variant_name in pool.variant_detection_scores:
-            lines.append(
-                f"- {variant_name} detection score: "
-                f"{pool.variant_detection_scores.get(variant_name, 0.0):.2f}"
-            )
-    lines.append(f"- Candidate beats king: {'yes' if pool.candidate_beats_king else 'no'}")
-    lines.append(f"- Candidate score delta: {pool.candidate_score_delta:+.2f}")
-    return lines
 
 
 def write_challenge_summary(path: Path, summary: ChallengeSummary) -> None:

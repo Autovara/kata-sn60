@@ -712,20 +712,6 @@ def add_long_answer_signatures(text: str, hashes_by_word_count: dict[int, set[st
         bucket.add(hash_words(words[start : start + MIN_LONG_ANSWER_WORDS]))
 
 
-def first_matching_window_hash(
-    words: list[str],
-    word_counts: set[int] | frozenset[int],
-    signatures: set[str] | frozenset[str],
-) -> str | None:
-    match = first_matching_window_match(
-        words,
-        word_counts,
-        signatures,
-        [(word, 0) for word in words],
-    )
-    return match.digest if match is not None else None
-
-
 def first_matching_window_match(
     words: list[str],
     word_counts: set[int] | frozenset[int],
