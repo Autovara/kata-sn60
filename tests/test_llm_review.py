@@ -5,8 +5,10 @@ from pathlib import Path
 
 from kata.screening.models import ScreeningDecision, ScreeningFinding
 
+from kata_sn60 import llm_review
 from kata_sn60.llm_review import (
     LlmCommandResult,
+    call_openai_chat_api,
     parse_llm_review_json,
     review_suspicious_submission_with_llm,
 )
@@ -137,6 +139,8 @@ def test_llm_review_is_not_called_for_clean_decision(tmp_path: Path, monkeypatch
 
 def test_llm_review_failure_adds_note_not_reject(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("KATA_SCREENING_LLM_REVIEW", "1")
+    # No API key configured -> the codex failure is final, no fallback attempted.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     def failing_runner(
         _command: list[str],
@@ -175,3 +179,150 @@ def test_parse_llm_review_json_extracts_json_from_markdown() -> None:
     assert result.confidence == 1.0
     assert result.evidence[0].line is None
     assert result.summary == "confirmed"
+
+
+def test_llm_review_falls_back_to_api_when_codex_unreachable(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("KATA_SCREENING_LLM_REVIEW", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    api_calls: list[tuple[str, str, int]] = []
+
+    def missing_codex_runner(_command, _prompt, _timeout, _cwd) -> LlmCommandResult:
+        raise FileNotFoundError("[Errno 2] No such file or directory: 'codex'")
+
+    def fake_api(prompt: str, model: str, timeout_seconds: int) -> str:
+        api_calls.append((prompt, model, timeout_seconds))
+        return (
+            '{"verdict":"reject","confidence":0.9,'
+            '"evidence":[{"line":12,"reason":"copied king agent"}],'
+            '"summary":"source is a copy of the king"}'
+        )
+
+    findings, notes = review_suspicious_submission_with_llm(
+        submission_root=tmp_path,
+        bundle_files={"agent.py": "def agent_main():\n    return {}\n"},
+        decision=ScreeningDecision(status="review", review_reasons=[review_finding()]),
+        runner=missing_codex_runner,
+        api_runner=fake_api,
+    )
+
+    assert api_calls, "API fallback should be used when codex is unreachable"
+    assert any(f.rule_id == "llm_review.reject" for f in findings)
+    assert notes[0].rule_id == "llm_review.result"
+
+
+def test_llm_review_prefers_codex_when_it_succeeds(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("KATA_SCREENING_LLM_REVIEW", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    def good_codex(_command, _prompt, _timeout, _cwd) -> LlmCommandResult:
+        return LlmCommandResult(
+            returncode=0,
+            stdout="",
+            stderr="",
+            last_message=json.dumps(
+                {
+                    "verdict": "pass",
+                    "confidence": 0.8,
+                    "evidence": [],
+                    "summary": "generic analyzer",
+                }
+            ),
+        )
+
+    def must_not_call(_prompt, _model, _timeout) -> str:
+        raise AssertionError("API must not be called when codex succeeds")
+
+    findings, notes = review_suspicious_submission_with_llm(
+        submission_root=tmp_path,
+        bundle_files={"agent.py": "def agent_main():\n    return {}\n"},
+        decision=ScreeningDecision(status="review", review_reasons=[review_finding()]),
+        runner=good_codex,
+        api_runner=must_not_call,
+    )
+
+    assert findings == []
+    assert "pass" in notes[0].reason
+
+
+def test_llm_review_no_fallback_without_api_key(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("KATA_SCREENING_LLM_REVIEW", "1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    def missing_codex(_command, _prompt, _timeout, _cwd) -> LlmCommandResult:
+        raise FileNotFoundError("no codex")
+
+    def must_not_call(_prompt, _model, _timeout) -> str:
+        raise AssertionError("API must not be called without a configured key")
+
+    findings, notes = review_suspicious_submission_with_llm(
+        submission_root=tmp_path,
+        bundle_files={"agent.py": "x"},
+        decision=ScreeningDecision(status="review", review_reasons=[review_finding()]),
+        runner=missing_codex,
+        api_runner=must_not_call,
+    )
+
+    assert findings == []
+    assert notes[0].rule_id == "llm_review.result"
+    assert "error" in notes[0].reason
+
+
+def test_llm_review_api_model_override(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("KATA_SCREENING_LLM_REVIEW", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("KATA_SCREENING_LLM_API_MODEL", "codex-5.3")
+    seen: dict[str, str] = {}
+
+    def missing_codex(_command, _prompt, _timeout, _cwd) -> LlmCommandResult:
+        raise FileNotFoundError("no codex")
+
+    def fake_api(_prompt: str, model: str, _timeout: int) -> str:
+        seen["model"] = model
+        return '{"verdict":"pass","confidence":0.5,"evidence":[],"summary":"ok"}'
+
+    review_suspicious_submission_with_llm(
+        submission_root=tmp_path,
+        bundle_files={"agent.py": "x"},
+        decision=ScreeningDecision(status="review", review_reasons=[review_finding()]),
+        runner=missing_codex,
+        api_runner=fake_api,
+    )
+
+    assert seen["model"] == "codex-5.3"
+
+
+def test_call_openai_chat_api_builds_request_and_parses_content(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-abc")
+    captured: dict[str, object] = {}
+
+    class FakeResp:
+        def __init__(self, data: bytes) -> None:
+            self._data = data
+
+        def read(self) -> bytes:
+            return self._data
+
+        def __enter__(self) -> "FakeResp":
+            return self
+
+        def __exit__(self, *_a: object) -> bool:
+            return False
+
+    def fake_urlopen(request, timeout):  # noqa: ANN001
+        captured["url"] = request.full_url
+        captured["auth"] = request.headers.get("Authorization")
+        captured["body"] = json.loads(request.data)
+        captured["timeout"] = timeout
+        reply = json.dumps({"verdict": "pass", "confidence": 0.5, "summary": "ok", "evidence": []})
+        return FakeResp(
+            json.dumps({"choices": [{"message": {"content": reply}}]}).encode("utf-8")
+        )
+
+    monkeypatch.setattr(llm_review.urllib.request, "urlopen", fake_urlopen)
+    content = call_openai_chat_api("PROMPT-TEXT", "gpt-5.4", 30)
+
+    assert captured["url"].endswith("/chat/completions")
+    assert captured["auth"] == "Bearer sk-abc"
+    assert captured["body"]["model"] == "gpt-5.4"
+    assert captured["body"]["messages"][0]["content"] == "PROMPT-TEXT"
+    assert "pass" in content

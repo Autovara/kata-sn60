@@ -5,6 +5,8 @@ import os
 import re
 import subprocess
 import tempfile
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -18,6 +20,15 @@ LLM_MODEL_ENV = "KATA_SCREENING_LLM_MODEL"
 LLM_CODEX_BIN_ENV = "KATA_SCREENING_LLM_CODEX_BIN"
 LLM_TIMEOUT_ENV = "KATA_SCREENING_LLM_TIMEOUT_SECONDS"
 LLM_ARTIFACT_DIR_ENV = "KATA_SCREENING_LLM_ARTIFACT_DIR"
+# OpenAI-API fallback: used only when the local codex CLI is unreachable (missing
+# binary, non-zero exit, timeout, or a cost/service error). The key is read from the
+# env var NAMED by LLM_API_KEY_NAME_ENV (default OPENAI_API_KEY), so it can point at a
+# different, still-funded account than the one the codex CLI is logged into.
+LLM_API_MODEL_ENV = "KATA_SCREENING_LLM_API_MODEL"
+LLM_API_KEY_NAME_ENV = "KATA_SCREENING_LLM_API_KEY_ENV"
+LLM_API_BASE_ENV = "KATA_SCREENING_LLM_API_BASE"
+DEFAULT_LLM_API_KEY_NAME = "OPENAI_API_KEY"
+DEFAULT_LLM_API_BASE = "https://api.openai.com/v1"
 LLM_BENCHMARK_FILE_ENV = "KATA_SCREENING_LLM_BENCHMARK_FILE"
 SN60_SANDBOX_ROOT_ENV = "KATA_SN60_SANDBOX_ROOT"
 SN60_BENCHMARK_FILE_ENV = "KATA_SN60_BENCHMARK_FILE"
@@ -33,6 +44,8 @@ MAX_LLM_BENCHMARK_VULNS_PER_PROJECT = 12
 
 LlmVerdict = Literal["pass", "suspicious", "reject", "error"]
 LlmRunner = Callable[[list[str], str, int, Path], "LlmCommandResult"]
+# (prompt, model, timeout_seconds) -> raw model text. Raises on any failure.
+LlmApiRunner = Callable[[str, str, int], str]
 
 
 @dataclass(frozen=True)
@@ -77,6 +90,7 @@ def review_suspicious_submission_with_llm(
     bundle_files: dict[str, str],
     decision: ScreeningDecision,
     runner: LlmRunner | None = None,
+    api_runner: LlmApiRunner | None = None,
     enabled: bool | None = None,
 ) -> tuple[list[ScreeningFinding], list[ScreeningFinding]]:
     """Return additional review findings and notes from optional LLM review.
@@ -91,6 +105,7 @@ def review_suspicious_submission_with_llm(
         bundle_files=bundle_files,
         decision=decision,
         runner=runner,
+        api_runner=api_runner,
     )
     findings: list[ScreeningFinding] = []
     notes: list[ScreeningFinding] = []
@@ -109,10 +124,44 @@ def run_codex_llm_review(
     bundle_files: dict[str, str],
     decision: ScreeningDecision,
     runner: LlmRunner | None = None,
+    api_runner: LlmApiRunner | None = None,
 ) -> LlmReviewResult:
+    """Review a suspicious submission, codex CLI first with an OpenAI-API fallback.
+
+    The local codex CLI is always tried first. Only if it fails to produce a verdict
+    -- a missing binary, non-zero exit, timeout, or a cost/service error, all of which
+    surface as verdict ``error`` -- AND an API key is configured is the OpenAI API
+    tried next with the same prompt. The audit artifact is recorded once, for whichever
+    attempt is final.
+    """
     model = os.environ.get(LLM_MODEL_ENV, DEFAULT_LLM_MODEL).strip() or DEFAULT_LLM_MODEL
     timeout_seconds = parse_timeout_seconds()
     prompt = build_llm_review_prompt(bundle_files=bundle_files, decision=decision)
+    cwd = submission_root.expanduser().resolve()
+
+    result = _attempt_codex_llm_review(prompt, model, timeout_seconds, cwd, runner)
+    if result.verdict == "error" and resolve_llm_api_key():
+        api_result = _attempt_api_llm_review(prompt, model, timeout_seconds, api_runner)
+        if api_result.verdict != "error":
+            result = api_result
+        else:
+            result = LlmReviewResult(
+                verdict="error",
+                confidence=0.0,
+                summary="LLM review failed on both the codex CLI and the API fallback.",
+                model=api_result.model,
+                error=f"codex: {result.error or 'n/a'} | api: {api_result.error or 'n/a'}",
+            )
+    return record_llm_review_artifact(result, prompt=prompt)
+
+
+def _attempt_codex_llm_review(
+    prompt: str,
+    model: str,
+    timeout_seconds: int,
+    cwd: Path,
+    runner: LlmRunner | None,
+) -> LlmReviewResult:
     command = [
         os.environ.get(LLM_CODEX_BIN_ENV, "codex"),
         "exec",
@@ -129,43 +178,101 @@ def run_codex_llm_review(
     with tempfile.NamedTemporaryFile("w+", suffix=".txt", encoding="utf-8") as output_file:
         command.extend([output_file.name, "-"])
         try:
-            result = (runner or run_llm_command)(
-                command,
-                prompt,
-                timeout_seconds,
-                submission_root.expanduser().resolve(),
-            )
+            result = (runner or run_llm_command)(command, prompt, timeout_seconds, cwd)
         except Exception as exc:  # noqa: BLE001 - LLM review must not block screening.
-            return record_llm_review_artifact(
-                LlmReviewResult(
-                    verdict="error",
-                    confidence=0.0,
-                    summary="LLM review failed before producing a verdict.",
-                    model=model,
-                    error=str(exc),
-                ),
-                prompt=prompt,
-            )
-    if result.returncode != 0:
-        return record_llm_review_artifact(
-            LlmReviewResult(
+            return LlmReviewResult(
                 verdict="error",
                 confidence=0.0,
-                summary="LLM review command failed.",
+                summary="LLM review failed before producing a verdict.",
                 model=model,
-                error=(result.stderr or result.stdout).strip()[:500],
-            ),
-            prompt=prompt,
+                error=str(exc),
+            )
+    if result.returncode != 0:
+        return LlmReviewResult(
+            verdict="error",
+            confidence=0.0,
+            summary="LLM review command failed.",
+            model=model,
+            error=(result.stderr or result.stdout).strip()[:500],
         )
     parsed = parse_llm_review_json(result.last_message or result.stdout)
-    parsed_result = LlmReviewResult(
+    return LlmReviewResult(
         verdict=parsed.verdict,
         confidence=parsed.confidence,
         summary=parsed.summary,
         evidence=parsed.evidence,
         model=model,
     )
-    return record_llm_review_artifact(parsed_result, prompt=prompt)
+
+
+def _attempt_api_llm_review(
+    prompt: str,
+    codex_model: str,
+    timeout_seconds: int,
+    api_runner: LlmApiRunner | None,
+) -> LlmReviewResult:
+    api_model = os.environ.get(LLM_API_MODEL_ENV, "").strip() or codex_model
+    try:
+        content = (api_runner or call_openai_chat_api)(prompt, api_model, timeout_seconds)
+    except Exception as exc:  # noqa: BLE001 - LLM review must not block screening.
+        return LlmReviewResult(
+            verdict="error",
+            confidence=0.0,
+            summary="LLM API review failed before producing a verdict.",
+            model=api_model,
+            error=str(exc),
+        )
+    parsed = parse_llm_review_json(content)
+    return LlmReviewResult(
+        verdict=parsed.verdict,
+        confidence=parsed.confidence,
+        summary=parsed.summary,
+        evidence=parsed.evidence,
+        model=api_model,
+    )
+
+
+def resolve_llm_api_key() -> str:
+    """The fallback API key, read from the env var NAMED by
+    ``KATA_SCREENING_LLM_API_KEY_ENV`` (default ``OPENAI_API_KEY``). Empty string when
+    unset, which disables the fallback."""
+    key_env = os.environ.get(LLM_API_KEY_NAME_ENV, "").strip() or DEFAULT_LLM_API_KEY_NAME
+    return os.environ.get(key_env, "").strip()
+
+
+def call_openai_chat_api(prompt: str, model: str, timeout_seconds: int) -> str:
+    """POST the review prompt to an OpenAI-compatible chat-completions endpoint and
+    return the model's raw text reply. Stdlib-only (urllib); raises on any failure."""
+    api_key = resolve_llm_api_key()
+    if not api_key:
+        raise RuntimeError("no API key configured for LLM review fallback")
+    base = (os.environ.get(LLM_API_BASE_ENV, "").strip() or DEFAULT_LLM_API_BASE).rstrip("/")
+    body = json.dumps(
+        {"model": model, "messages": [{"role": "user", "content": prompt}]}
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base}/chat/completions",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        raise RuntimeError(f"http {exc.code}: {detail}") from exc
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if not choices:
+        raise RuntimeError("LLM API returned no choices")
+    message = (choices[0] or {}).get("message") or {}
+    content = str(message.get("content") or "").strip()
+    if not content:
+        raise RuntimeError("LLM API returned empty content")
+    return content
 
 
 def run_llm_command(
