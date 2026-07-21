@@ -21,6 +21,7 @@ from kata.plugins.contract import (
 )
 
 from kata_sn60.execution.policy import tee_execution_enabled
+from kata_sn60.king_cache import benchmark_version_key
 from kata_sn60.sn60_bitsec import (
     Sn60EvaluationHook,
     Sn60ExecutionHook,
@@ -28,7 +29,6 @@ from kata_sn60.sn60_bitsec import (
     Sn60ReusedExecutionPayloads,
     Sn60SandboxSource,
     Sn60VariantSummary,
-    benchmark_version_key,
     build_cached_variant_hooks,
     build_default_evaluation_hook,
     build_default_execution_hook,

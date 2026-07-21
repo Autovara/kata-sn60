@@ -4,13 +4,11 @@ import hashlib
 import json
 import os
 import re
-import secrets
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from statistics import fmean
 from typing import Callable, Mapping, NamedTuple, TypedDict
@@ -27,12 +25,10 @@ from kata.util import write_json
 from kata_sn60.execution.policy import tee_execution_enabled
 from kata_sn60.king_cache import (
     KingScoreboard,
-    benchmark_version_key,
     load_king_scoreboard,
     save_king_scoreboard,
 )
 
-DEFAULT_SN60_DUEL_SCHEMA_VERSION = 2
 DEFAULT_SANDBOX_PROXY_NETWORK = "bitsec-net"
 DEFAULT_SANDBOX_PROXY_URL = "http://localhost:8087"
 DEFAULT_SANDBOX_INFERENCE_API = "http://bitsec_proxy:8000"
@@ -231,142 +227,6 @@ def _env_positive_int(name: str, default: int) -> int:
 def resolve_project_concurrency() -> int:
     """How many problems of one variant to score at once (>= 1)."""
     return _env_positive_int(PROJECT_CONCURRENCY_ENV_NAME, DEFAULT_PROJECT_CONCURRENCY)
-
-
-def sn60_codebase_pass_count(replica_results: list[Sn60ReplicaResult]) -> int:
-    """Number of distinct projects that pass the configured replica threshold."""
-    passes = 0
-    for project_key in {result.project_key for result in replica_results}:
-        project_replicas = [r for r in replica_results if r.project_key == project_key]
-        successful = [r for r in project_replicas if r.evaluation_status == "success"]
-        pass_count = sum(1 for r in successful if r.result == "PASS")
-        if project_passes(pass_count=pass_count, total_runs=len(project_replicas)):
-            passes += 1
-    return passes
-
-
-def run_sn60_bitsec_duel(
-    *,
-    king_artifact_path: str,
-    candidate_artifact_path: str,
-    project_keys: list[str],
-    output_root: str | None = None,
-    replicas_per_project: int = DEFAULT_REPLICAS_PER_PROJECT,
-    sandbox_root: str | None = None,
-    benchmark_file: str | None = None,
-    sandbox_commit: str | None = None,
-    scorer_version: str = "ScaBenchScorerV2",
-    eval_max_vulns: int = DEFAULT_EVAL_MAX_VULNS,
-    execution_hook: Sn60ExecutionHook | None = None,
-    evaluation_hook: Sn60EvaluationHook | None = None,
-    candidate_reused_execution_payloads: Sn60ReusedExecutionPayloads | None = None,
-    king_scoreboard_path: str | None = None,
-    progress_callback: Callable[[Sn60ReplicaContext, Sn60ReplicaResult], None] | None = None,
-) -> Sn60DuelSummary:
-    if not project_keys:
-        raise ValueError("SN60 duel requires at least one project key.")
-    if replicas_per_project <= 0:
-        raise ValueError("SN60 duel replicas_per_project must be positive.")
-    if eval_max_vulns <= 0:
-        raise ValueError("SN60 duel eval_max_vulns must be positive.")
-
-    source = resolve_sn60_sandbox_source(
-        sandbox_root=sandbox_root,
-        benchmark_file=benchmark_file,
-        sandbox_commit=sandbox_commit,
-        scorer_version=scorer_version,
-    )
-    validate_sn60_project_keys(project_keys, sandbox_source=source)
-    king_root = Path(king_artifact_path).expanduser().resolve()
-    candidate_root = Path(candidate_artifact_path).expanduser().resolve()
-    output_base = (
-        Path(output_root).expanduser().resolve() if output_root else Path("runs").resolve()
-    )
-    run_id = build_sn60_duel_id()
-    run_root = output_base / run_id
-    run_root.mkdir(parents=True, exist_ok=False)
-
-    resolved_execution_hook = execution_hook or build_default_execution_hook(
-        source,
-        use_tee=tee_execution_enabled(),
-    )
-    resolved_evaluation_hook = evaluation_hook or build_default_evaluation_hook(source)
-    king_hash = hash_bundle_root(king_root)
-    candidate_hash = hash_bundle_root(candidate_root)
-
-    # The king's score is stable for a fixed king + benchmark, so route it through
-    # the per-project cache when a scoreboard is configured: an uncached project
-    # runs the king once and stores it; a cached project reuses it without paying
-    # for inference. The candidate always runs fresh.
-    king_execution_hook = resolved_execution_hook
-    king_evaluation_hook = resolved_evaluation_hook
-    if king_scoreboard_path:
-        king_execution_hook, king_evaluation_hook = build_cached_variant_hooks(
-            scoreboard_path=king_scoreboard_path,
-            artifact_hash=king_hash,
-            benchmark_version=benchmark_version_key(source.scorer_version, source.benchmark_sha256),
-            base_execution_hook=resolved_execution_hook,
-            base_evaluation_hook=resolved_evaluation_hook,
-        )
-
-    # Score the king first: on the first duel this fills the king's 6 problems and
-    # caches them; on every later duel the king is served from that cache (no
-    # inference), so the challenge is "king (all 6) -> candidate -> candidate -> ...".
-    king_results = score_variant_on_projects(
-        run_id=run_id,
-        run_root=run_root,
-        variant_name="king",
-        artifact_root=king_root,
-        project_keys=project_keys,
-        replicas_per_project=replicas_per_project,
-        sandbox_source=source,
-        execution_hook=king_execution_hook,
-        evaluation_hook=king_evaluation_hook,
-        eval_max_vulns=eval_max_vulns,
-        progress_callback=progress_callback,
-    )
-    candidate_results = score_variant_on_projects(
-        run_id=run_id,
-        run_root=run_root,
-        variant_name="candidate",
-        artifact_root=candidate_root,
-        project_keys=project_keys,
-        replicas_per_project=replicas_per_project,
-        sandbox_source=source,
-        execution_hook=resolved_execution_hook,
-        evaluation_hook=resolved_evaluation_hook,
-        reused_execution_payloads=candidate_reused_execution_payloads,
-        eval_max_vulns=eval_max_vulns,
-        progress_callback=progress_callback,
-    )
-    ordered_executed_keys = list(project_keys)
-
-    king_summary = summarize_variant(
-        variant_name="king",
-        artifact_root=king_root,
-        artifact_hash=king_hash,
-        replica_results=king_results,
-    )
-    candidate_summary = summarize_variant(
-        variant_name="candidate",
-        artifact_root=candidate_root,
-        artifact_hash=candidate_hash,
-        replica_results=candidate_results,
-    )
-
-    summary = Sn60DuelSummary(
-        schema_version=DEFAULT_SN60_DUEL_SCHEMA_VERSION,
-        run_id=run_id,
-        created_at=datetime.now(UTC).isoformat(),
-        output_root=str(run_root),
-        project_keys=ordered_executed_keys,
-        replicas_per_project=replicas_per_project,
-        sandbox_source=source,
-        king=king_summary,
-        candidate=candidate_summary,
-    )
-    write_sn60_duel_summary(run_root / "duel_summary.json", summary)
-    return summary
 
 
 def score_variant_on_projects(
@@ -642,11 +502,6 @@ def resolve_git_commit(repo_root: Path) -> str:
         text=True,
     )
     return completed.stdout.strip()
-
-
-def build_sn60_duel_id() -> str:
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return f"sn60-duel-{timestamp}-{secrets.token_hex(3)}"
 
 
 def stage_bundle(source_root: Path, destination_root: Path) -> None:

@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -13,9 +10,7 @@ from kata_sn60.sn60_bitsec import (
     DEFAULT_SANDBOX_COMMIT,
     Sn60ReplicaContext,
     Sn60ReplicaResult,
-    Sn60SandboxSource,
     build_bitsec_execution_command,
-    build_cached_variant_hooks,
     build_default_evaluation_hook,
     build_default_execution_hook,
     ensure_internal_agent_network,
@@ -26,23 +21,13 @@ from kata_sn60.sn60_bitsec import (
     resolve_sn60_inference_api,
     resolve_sn60_proxy_network,
     resolve_sn60_sandbox_source,
-    run_sn60_bitsec_duel,
-    sn60_codebase_pass_count,
     sn60_container_name,
     sn60_synthetic_ids,
     summarize_project,
     summarize_variant,
+    validate_sn60_project_keys,
 )
 from kata_sn60.validator_system.challenge import sn60_variant_rank
-
-
-def write_bundle(root: Path, *, agent_source: str, helper_source: str | None = None) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "agent.py").write_text(agent_source, encoding="utf-8")
-    if helper_source is not None:
-        helpers_root = root / "helpers"
-        helpers_root.mkdir()
-        (helpers_root / "planner.py").write_text(helper_source, encoding="utf-8")
 
 
 def write_sandbox_source(root: Path) -> Path:
@@ -61,220 +46,6 @@ def write_sandbox_source(root: Path) -> Path:
         encoding="utf-8",
     )
     return benchmark_path
-
-
-def test_run_sn60_bitsec_duel_stages_full_bundle_and_persists_outputs(tmp_path: Path) -> None:
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = write_sandbox_source(sandbox_root)
-    benchmark_path.write_text(
-        json.dumps(
-            [
-                {"project_id": "project-alpha", "vulnerabilities": []},
-                {"project_id": "project-beta", "vulnerabilities": []},
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    king_root = tmp_path / "king"
-    candidate_root = tmp_path / "candidate"
-    write_bundle(
-        king_root,
-        agent_source="def agent_main():\n    return {'vulnerabilities': []}\n",
-        helper_source="VALUE = 'king-helper'\n",
-    )
-    write_bundle(
-        candidate_root,
-        agent_source="def agent_main():\n    return {'vulnerabilities': []}\n",
-        helper_source="VALUE = 'candidate-helper'\n",
-    )
-
-    staged_helpers: dict[tuple[str, str, int], str] = {}
-
-    def execute(context: Sn60ReplicaContext) -> dict[str, object]:
-        helper_path = Path(context.bundle_root) / "helpers" / "planner.py"
-        staged_helpers[(context.variant_name, context.project_key, context.replica_index)] = (
-            helper_path.read_text(encoding="utf-8")
-        )
-        return {
-            "success": True,
-            "report": {
-                "project": context.project_key,
-                "vulnerabilities": [
-                    {
-                        "title": (
-                            f"{context.variant_name}-{context.project_key}-{context.replica_index}"
-                        ),
-                    }
-                ],
-            },
-        }
-
-    def evaluate(
-        context: Sn60ReplicaContext,
-        report_payload: dict[str, object],
-    ) -> dict[str, object]:
-        detection_rate = 1.0 if context.variant_name == "candidate" else 0.25
-        if (
-            context.variant_name == "king"
-            and context.project_key == "project-beta"
-            and context.replica_index == 2
-        ):
-            return {"status": "error", "error": "forced failure", "result": {}}
-        return {
-            "status": "success",
-            "result": {
-                "project": context.project_key,
-                "timestamp": "2026-07-01T00:00:00+00:00",
-                "total_expected": 4,
-                "total_found": len(report_payload["report"]["vulnerabilities"]),
-                "true_positives": int(detection_rate * 4),
-                "false_negatives": 4 - int(detection_rate * 4),
-                "false_positives": 0,
-                "detection_rate": detection_rate,
-                "precision": 1.0,
-                "f1_score": detection_rate,
-                "result": "PASS" if detection_rate == 1.0 else "FAIL",
-                "matched_findings": [],
-                "missed_findings": [],
-                "extra_findings": [],
-                "undecided_findings": [],
-            },
-        }
-
-    summary = run_sn60_bitsec_duel(
-        king_artifact_path=str(king_root),
-        candidate_artifact_path=str(candidate_root),
-        project_keys=["project-alpha", "project-beta"],
-        output_root=str(tmp_path / "runs"),
-        replicas_per_project=2,
-        sandbox_root=str(sandbox_root),
-        benchmark_file=str(benchmark_path),
-        sandbox_commit="sandbox-commit-123",
-        execution_hook=execute,
-        evaluation_hook=evaluate,
-    )
-
-    assert summary.sandbox_source.sandbox_commit == "sandbox-commit-123"
-    assert summary.sandbox_source.benchmark_file == str(benchmark_path.resolve())
-    assert summary.king.invalid_runs == 1
-    assert summary.candidate.invalid_runs == 0
-    # average_detection_rate is now a mean over the SUCCESSFUL replicas only, so the
-    # king's one invalid replica no longer drags the diagnostic down (0.75/3 == 0.25
-    # rather than the old 0.75/4 == 0.1875).
-    assert summary.king.average_detection_rate == 0.25
-    assert summary.candidate.average_detection_rate == 1.0
-    assert summary.candidate.pass_count == 4
-    assert summary.candidate.codebase_pass_count == 2
-    assert summary.candidate.aggregated_score == 1.0
-    assert summary.king.codebase_pass_count == 0
-    assert summary.king.aggregated_score == 0.25
-    candidate_projects = {
-        project.project_key: project.passed for project in summary.candidate.project_summaries
-    }
-    assert candidate_projects == {"project-alpha": True, "project-beta": True}
-
-    duel_summary_path = Path(summary.output_root) / "duel_summary.json"
-    assert duel_summary_path.exists()
-
-    persisted = json.loads(duel_summary_path.read_text(encoding="utf-8"))
-    assert persisted["run_id"] == summary.run_id
-    assert persisted["candidate"]["project_summaries"][0]["project_key"] == "project-alpha"
-
-    candidate_helper = staged_helpers[("candidate", "project-alpha", 1)]
-    king_helper = staged_helpers[("king", "project-alpha", 1)]
-    assert "candidate-helper" in candidate_helper
-    assert "king-helper" in king_helper
-
-    for variant_name in ("king", "candidate"):
-        report_path = (
-            Path(summary.output_root)
-            / variant_name
-            / "project-alpha"
-            / "replica-01"
-            / "reports"
-            / "project-alpha"
-            / "report.json"
-        )
-        evaluation_path = report_path.with_name("evaluation.json")
-        assert report_path.exists()
-        assert evaluation_path.exists()
-
-
-def test_duel_records_invalid_candidate_replica_and_continues(tmp_path: Path) -> None:
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = write_sandbox_source(sandbox_root)
-    benchmark_path.write_text(
-        json.dumps(
-            [
-                {"project_id": "project-alpha", "vulnerabilities": []},
-                {"project_id": "project-beta", "vulnerabilities": []},
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    king_root = tmp_path / "king"
-    candidate_root = tmp_path / "candidate"
-    write_bundle(king_root, agent_source="def agent_main():\n    return {}\n")
-    write_bundle(candidate_root, agent_source="def agent_main():\n    return {}\n")
-
-    executed: list[tuple[str, str, int]] = []
-
-    def execute(context: Sn60ReplicaContext) -> dict[str, object]:
-        executed.append((context.variant_name, context.project_key, context.replica_index))
-        return {"success": True, "report": {"vulnerabilities": []}}
-
-    def evaluate(
-        context: Sn60ReplicaContext,
-        _report_payload: dict[str, object],
-    ) -> dict[str, object]:
-        if context.variant_name == "candidate" and context.replica_index == 1:
-            return {"status": "error", "error": "invalid candidate output", "result": {}}
-        return {
-            "status": "success",
-            "result": {
-                "result": "PASS",
-                "detection_rate": 1.0,
-                "true_positives": 1,
-                "total_expected": 1,
-                "total_found": 1,
-            },
-        }
-
-    summary = run_sn60_bitsec_duel(
-        king_artifact_path=str(king_root),
-        candidate_artifact_path=str(candidate_root),
-        project_keys=["project-alpha", "project-beta"],
-        output_root=str(tmp_path / "runs"),
-        replicas_per_project=3,
-        sandbox_root=str(sandbox_root),
-        benchmark_file=str(benchmark_path),
-        sandbox_commit="sandbox-commit-stop-invalid",
-        execution_hook=execute,
-        evaluation_hook=evaluate,
-    )
-
-    assert len(executed) == 12
-    # King is scored first (all 6), then the candidate (all 6). Order within a
-    # variant is unspecified (its problems run concurrently), so assert the phase
-    # boundary and that every unit ran, not an exact sequence.
-    assert [variant for variant, _project, _replica in executed] == (
-        ["king"] * 6 + ["candidate"] * 6
-    )
-    expected_units = {
-        (project, replica) for project in ("project-alpha", "project-beta") for replica in (1, 2, 3)
-    }
-    assert {(p, r) for v, p, r in executed if v == "king"} == expected_units
-    assert {(p, r) for v, p, r in executed if v == "candidate"} == expected_units
-    assert summary.project_keys == ["project-alpha", "project-beta"]
-    assert summary.candidate.invalid_runs == 2
-    assert summary.candidate.successful_runs == 4
-    assert len(summary.king.replica_results) == 6
-    assert summary.king.invalid_runs == 0
-    persisted = json.loads((Path(summary.output_root) / "duel_summary.json").read_text())
-    assert persisted["candidate"]["invalid_runs"] == 2
-    assert len(persisted["king"]["replica_results"]) == 6
 
 
 def test_load_sn60_benchmark_project_keys_reads_real_snapshot_ids(tmp_path: Path) -> None:
@@ -296,31 +67,6 @@ def test_load_sn60_benchmark_project_keys_reads_real_snapshot_ids(tmp_path: Path
     )
 
     assert load_sn60_benchmark_project_keys(source) == ["project-alpha", "project-beta"]
-
-
-def test_run_sn60_bitsec_duel_rejects_project_keys_missing_from_benchmark(
-    tmp_path: Path,
-) -> None:
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = write_sandbox_source(sandbox_root)
-    king_root = tmp_path / "king"
-    candidate_root = tmp_path / "candidate"
-    write_bundle(king_root, agent_source="def agent_main():\n    return {'vulnerabilities': []}\n")
-    write_bundle(
-        candidate_root,
-        agent_source="def agent_main():\n    return {'vulnerabilities': []}\n",
-    )
-
-    with pytest.raises(ValueError, match="not present in the resolved benchmark"):
-        run_sn60_bitsec_duel(
-            king_artifact_path=str(king_root),
-            candidate_artifact_path=str(candidate_root),
-            project_keys=["project-missing"],
-            output_root=str(tmp_path / "runs"),
-            sandbox_root=str(sandbox_root),
-            benchmark_file=str(benchmark_path),
-            sandbox_commit="commit-1",
-        )
 
 
 def test_build_bitsec_execution_command_mounts_bundle_and_sets_pythonpath(tmp_path: Path) -> None:
@@ -1138,50 +884,6 @@ def _replica(project_key: str, result: str | None, status: str = "success") -> S
     )
 
 
-def _make_multi_project_benchmark(root: Path, project_keys: list[str]) -> Path:
-    benchmark_path = root / "validator" / "curated-highs-only-2025-08-08.json"
-    benchmark_path.parent.mkdir(parents=True, exist_ok=True)
-    benchmark_path.write_text(
-        json.dumps([{"project_id": key, "vulnerabilities": []} for key in project_keys]) + "\n",
-        encoding="utf-8",
-    )
-    return benchmark_path
-
-
-def _passfail_hooks(*, king_pass: bool, candidate_pass: bool, candidate_status: str = "success"):
-    executed: list[tuple[str, str]] = []
-
-    def execute(context: Sn60ReplicaContext) -> dict[str, object]:
-        executed.append((context.variant_name, context.project_key))
-        return {"success": True, "report": {"project": context.project_key, "vulnerabilities": []}}
-
-    def evaluate(context: Sn60ReplicaContext, _report: dict[str, object]) -> dict[str, object]:
-        is_candidate = context.variant_name == "candidate"
-        status = candidate_status if is_candidate else "success"
-        passes = candidate_pass if is_candidate else king_pass
-        return {
-            "status": status,
-            "result": {
-                "result": "PASS" if passes else "FAIL",
-                "detection_rate": 1.0 if passes else 0.0,
-                "true_positives": 1 if passes else 0,
-                "total_expected": 1,
-                "total_found": 1 if passes else 0,
-            },
-        }
-
-    return executed, execute, evaluate
-
-
-def test_codebase_pass_count_uses_configured_replica_threshold() -> None:
-    results = [
-        _replica("a", "PASS"),
-        _replica("b", "FAIL"),
-        _replica("c", None, status="error"),
-    ]
-    assert sn60_codebase_pass_count(results) == 1
-
-
 def test_summarize_variant_loose_pass_count_counts_any_replica_pass() -> None:
     # Project p passes on only 1 of 3 replicas (below the 2/3 gate); project q on none.
     results = [
@@ -1319,98 +1021,6 @@ def test_flaked_candidate_still_outranks_a_weaker_king() -> None:
     assert sn60_variant_rank(candidate) > sn60_variant_rank(king)
 
 
-def test_duel_ignores_legacy_early_stop_env_and_runs_full_grid(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("KATA_SN60_EARLY_STOP", "1")
-    monkeypatch.setenv("KATA_SN60_EARLY_STOP_PHASE1", "1")
-    monkeypatch.setenv("KATA_SN60_EARLY_STOP_MARGIN", "1")
-    keys = [f"project-{i:02d}" for i in range(4)]
-    executed, execute, evaluate = _passfail_hooks(king_pass=True, candidate_pass=False)
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = _make_multi_project_benchmark(sandbox_root, keys)
-    king_root = tmp_path / "king"
-    candidate_root = tmp_path / "candidate"
-    write_bundle(king_root, agent_source="def agent_main():\n    return {}\n")
-    write_bundle(candidate_root, agent_source="def agent_main():\n    return {}\n")
-    summary = run_sn60_bitsec_duel(
-        king_artifact_path=str(king_root),
-        candidate_artifact_path=str(candidate_root),
-        project_keys=keys,
-        output_root=str(tmp_path / "runs"),
-        replicas_per_project=1,
-        sandbox_root=str(sandbox_root),
-        benchmark_file=str(benchmark_path),
-        sandbox_commit="commit-early-stop",
-        execution_hook=execute,
-        evaluation_hook=evaluate,
-    )
-    assert {project for _, project in executed} == set(keys)  # all projects ran
-    assert summary.project_keys == keys  # original order preserved
-    assert not (Path(summary.output_root) / "early_stop.json").exists()
-
-
-def test_duel_scores_king_variant_fully_then_candidate_variant(tmp_path: Path) -> None:
-    # Each variant is scored over all projects as one phase, KING FIRST (so the
-    # king is scored + cached before the candidate), then the candidate fully.
-    keys = ["project-alpha", "project-beta"]
-    executed: list[tuple[str, str, int]] = []
-
-    def execute(context: Sn60ReplicaContext) -> dict[str, object]:
-        executed.append((context.variant_name, context.project_key, context.replica_index))
-        return {"success": True, "report": {"project": context.project_key, "vulnerabilities": []}}
-
-    def evaluate(_context: Sn60ReplicaContext, _report: dict[str, object]) -> dict[str, object]:
-        return {
-            "status": "success",
-            "result": {
-                "result": "PASS",
-                "detection_rate": 1.0,
-                "true_positives": 1,
-                "total_expected": 1,
-                "total_found": 1,
-            },
-        }
-
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = _make_multi_project_benchmark(sandbox_root, keys)
-    king_root = tmp_path / "king"
-    candidate_root = tmp_path / "candidate"
-    write_bundle(king_root, agent_source="def agent_main():\n    return {}\n")
-    write_bundle(candidate_root, agent_source="def agent_main():\n    return {}\n")
-
-    run_sn60_bitsec_duel(
-        king_artifact_path=str(king_root),
-        candidate_artifact_path=str(candidate_root),
-        project_keys=keys,
-        output_root=str(tmp_path / "runs"),
-        replicas_per_project=2,
-        sandbox_root=str(sandbox_root),
-        benchmark_file=str(benchmark_path),
-        sandbox_commit="commit-project-order",
-        execution_hook=execute,
-        evaluation_hook=evaluate,
-    )
-
-    # The king variant is fully scored before the candidate variant starts (the
-    # duel joins the king's workers before running the candidate). Order *within* a
-    # variant is unspecified because its problems are scored concurrently, so check
-    # the phase boundary and the full set of units rather than an exact sequence.
-    assert [unit[0] for unit in executed] == ["king"] * 4 + ["candidate"] * 4
-    king_units = sorted(unit for unit in executed if unit[0] == "king")
-    candidate_units = sorted(unit for unit in executed if unit[0] == "candidate")
-    assert king_units == [
-        ("king", "project-alpha", 1),
-        ("king", "project-alpha", 2),
-        ("king", "project-beta", 1),
-        ("king", "project-beta", 2),
-    ]
-    assert candidate_units == [
-        ("candidate", "project-alpha", 1),
-        ("candidate", "project-alpha", 2),
-        ("candidate", "project-beta", 1),
-        ("candidate", "project-beta", 2),
-    ]
-
-
 def test_extract_sn60_evaluation_payload_ignores_scorer_console_noise() -> None:
     # The pinned scorer prints Rich tables + per-finding logs to stdout, then the
     # result JSON on the last line. The whole stream is not valid JSON.
@@ -1439,227 +1049,21 @@ def test_extract_sn60_evaluation_payload_returns_none_without_result() -> None:
     assert extract_sn60_evaluation_payload('{"foo": 1}') is None
 
 
-def _counting_duel_hooks():
-    """Hooks that record every execution so tests can assert what actually ran."""
-    calls: list[tuple[str, str, int]] = []
-
-    def execute(context: Sn60ReplicaContext) -> dict[str, object]:
-        calls.append((context.variant_name, context.project_key, context.replica_index))
-        return {
-            "success": True,
-            "report": {"project": context.project_key, "vulnerabilities": [{"title": "v"}]},
-        }
-
-    def evaluate(_context: Sn60ReplicaContext, _report: dict[str, object]) -> dict[str, object]:
-        return {
-            "status": "success",
-            "result": {
-                "result": "PASS",
-                "detection_rate": 1.0,
-                "true_positives": 1,
-                "total_expected": 1,
-                "total_found": 1,
-            },
-        }
-
-    return calls, execute, evaluate
-
-
-def _run_cached_duel(
-    *, tmp_path, king_root, candidate_root, benchmark_path, keys, scoreboard, hooks
-):
-    _calls, execute, evaluate = hooks
-    return run_sn60_bitsec_duel(
-        king_artifact_path=str(king_root),
-        candidate_artifact_path=str(candidate_root),
-        project_keys=keys,
-        output_root=str(tmp_path / "runs"),
-        replicas_per_project=1,
-        sandbox_root=str(benchmark_path.parents[1]),
-        benchmark_file=str(benchmark_path),
-        sandbox_commit="cache-commit",
-        execution_hook=execute,
-        evaluation_hook=evaluate,
-        king_scoreboard_path=str(scoreboard),
-    )
-
-
-def test_duel_caches_king_and_skips_rerun_on_second_duel(tmp_path: Path) -> None:
-    keys = ["project-alpha", "project-beta"]
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = _make_multi_project_benchmark(sandbox_root, keys)
-    king_root = tmp_path / "king"
-    candidate_root = tmp_path / "candidate"
-    write_bundle(king_root, agent_source="def agent_main():\n    return {}\n")
-    write_bundle(candidate_root, agent_source="def agent_main():\n    return {}\n")
-    scoreboard = tmp_path / "king_scoreboard.json"
-
-    hooks = _counting_duel_hooks()
-    calls = hooks[0]
-    first = _run_cached_duel(
-        tmp_path=tmp_path,
-        king_root=king_root,
-        candidate_root=candidate_root,
-        benchmark_path=benchmark_path,
-        keys=keys,
-        scoreboard=scoreboard,
-        hooks=hooks,
-    )
-    # First duel: the king is uncached, so it runs on every project.
-    assert {project for variant, project, _ in calls if variant == "king"} == set(keys)
-    assert scoreboard.exists()
-
-    calls.clear()
-    second = _run_cached_duel(
-        tmp_path=tmp_path,
-        king_root=king_root,
-        candidate_root=candidate_root,
-        benchmark_path=benchmark_path,
-        keys=keys,
-        scoreboard=scoreboard,
-        hooks=hooks,
-    )
-    # Second duel: the king is served from cache (not re-run); the candidate still runs.
-    assert [c for c in calls if c[0] == "king"] == []
-    assert {project for variant, project, _ in calls if variant == "candidate"} == set(keys)
-    # The cached king score is identical to the freshly-computed one.
-    assert second.king.aggregated_score == first.king.aggregated_score
-    assert second.king.true_positives == first.king.true_positives
-    assert second.king.total_expected == first.king.total_expected
-
-
-def test_duel_king_cache_recomputes_when_king_changes(tmp_path: Path) -> None:
-    keys = ["project-alpha"]
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = _make_multi_project_benchmark(sandbox_root, keys)
-    king_root = tmp_path / "king"
-    candidate_root = tmp_path / "candidate"
-    write_bundle(king_root, agent_source="def agent_main():\n    return {}\n")
-    write_bundle(candidate_root, agent_source="def agent_main():\n    return {}\n")
-    scoreboard = tmp_path / "king_scoreboard.json"
-
-    hooks = _counting_duel_hooks()
-    calls = hooks[0]
-    _run_cached_duel(
-        tmp_path=tmp_path,
-        king_root=king_root,
-        candidate_root=candidate_root,
-        benchmark_path=benchmark_path,
-        keys=keys,
-        scoreboard=scoreboard,
-        hooks=hooks,
-    )
-
-    # A new king (different bundle hash) must not reuse the old king's cached score.
-    write_bundle(king_root, agent_source="def agent_main():\n    return {'changed': True}\n")
-    calls.clear()
-    _run_cached_duel(
-        tmp_path=tmp_path,
-        king_root=king_root,
-        candidate_root=candidate_root,
-        benchmark_path=benchmark_path,
-        keys=keys,
-        scoreboard=scoreboard,
-        hooks=hooks,
-    )
-    assert {project for variant, project, _ in calls if variant == "king"} == set(keys)
-
-
-def test_duel_king_cache_recomputes_when_benchmark_changes(tmp_path: Path) -> None:
-    keys = ["project-alpha"]
-    sandbox_root = tmp_path / "sandbox"
-    benchmark_path = _make_multi_project_benchmark(sandbox_root, keys)
-    king_root = tmp_path / "king"
-    candidate_root = tmp_path / "candidate"
-    write_bundle(king_root, agent_source="def agent_main():\n    return {}\n")
-    write_bundle(candidate_root, agent_source="def agent_main():\n    return {}\n")
-    scoreboard = tmp_path / "king_scoreboard.json"
-
-    hooks = _counting_duel_hooks()
-    calls = hooks[0]
-    _run_cached_duel(
-        tmp_path=tmp_path,
-        king_root=king_root,
-        candidate_root=candidate_root,
-        benchmark_path=benchmark_path,
-        keys=keys,
-        scoreboard=scoreboard,
-        hooks=hooks,
-    )
-
-    # An edited benchmark (different content hash) must force the king to recompute.
-    benchmark_path.write_text(
-        json.dumps([{"project_id": "project-alpha", "vulnerabilities": [{"title": "new"}]}]) + "\n",
-        encoding="utf-8",
-    )
-    calls.clear()
-    _run_cached_duel(
-        tmp_path=tmp_path,
-        king_root=king_root,
-        candidate_root=candidate_root,
-        benchmark_path=benchmark_path,
-        keys=keys,
-        scoreboard=scoreboard,
-        hooks=hooks,
-    )
-    assert {project for variant, project, _ in calls if variant == "king"} == set(keys)
-
-
-def test_cached_king_scoreboard_saves_are_serialized(
+def test_validate_sn60_project_keys_rejects_keys_missing_from_benchmark(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    scoreboard = tmp_path / "king_scoreboard.json"
-    source = Sn60SandboxSource(
-        sandbox_root=str(tmp_path / "sandbox"),
-        benchmark_file=str(tmp_path / "benchmark.json"),
-        benchmark_sha256="benchmark-sha",
-        sandbox_commit="sandbox-commit",
+    """Project keys not present in the resolved benchmark are rejected up front.
+
+    (Direct coverage for the shared validator used across the plugin, challenge,
+    and scoring paths.)
+    """
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = write_sandbox_source(sandbox_root)
+    source = resolve_sn60_sandbox_source(
+        sandbox_root=str(sandbox_root),
+        benchmark_file=str(benchmark_path),
+        sandbox_commit="commit-1",
         scorer_version="ScaBenchScorerV2",
     )
-    active_saves = 0
-    overlapping_saves = 0
-    save_lock = threading.Lock()
-
-    def fake_save(_path, _board) -> None:
-        nonlocal active_saves, overlapping_saves
-        with save_lock:
-            active_saves += 1
-            if active_saves > 1:
-                overlapping_saves += 1
-        time.sleep(0.01)
-        with save_lock:
-            active_saves -= 1
-
-    monkeypatch.setattr("kata_sn60.sn60_bitsec.save_king_scoreboard", fake_save)
-
-    _execute, evaluate = build_cached_variant_hooks(
-        scoreboard_path=scoreboard,
-        artifact_hash="king-sha",
-        benchmark_version="benchmark-version",
-        base_execution_hook=lambda _context: {"success": True, "report": {}},
-        base_evaluation_hook=lambda _context, _report: {
-            "status": "success",
-            "result": {"detection_rate": 1.0},
-        },
-    )
-
-    def evaluate_project(index: int) -> dict[str, object]:
-        context = Sn60ReplicaContext(
-            run_id="run",
-            variant_name="king",
-            project_key=f"project-{index}",
-            replica_index=1,
-            bundle_root=str(tmp_path / f"bundle-{index}"),
-            reports_root=str(tmp_path / f"reports-{index}"),
-            report_path=str(tmp_path / f"reports-{index}" / "report.json"),
-            evaluation_path=str(tmp_path / f"reports-{index}" / "evaluation.json"),
-            sandbox_source=source,
-        )
-        return evaluate(context, {"success": True, "report": {}})
-
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        results = list(executor.map(evaluate_project, range(8)))
-
-    assert len(results) == 8
-    assert overlapping_saves == 0
+    with pytest.raises(ValueError, match="not present in the resolved benchmark"):
+        validate_sn60_project_keys(["project-missing"], sandbox_source=source)
