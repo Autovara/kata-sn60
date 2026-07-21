@@ -182,6 +182,9 @@ class Sn60VariantSummary:
     f1_score: float
     project_summaries: list[Sn60ProjectAggregate]
     replica_results: list[Sn60ReplicaResult]
+    # Projects on which AT LEAST ONE replica passed (looser than the 2/3-majority
+    # ``codebase_pass_count``). Default keeps older records/constructors valid.
+    loose_pass_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -705,6 +708,10 @@ def summarize_variant(
         else 0.0
     )
     codebase_pass_count = sum(1 for project in project_summaries if project.passed)
+    # Looser count: a project counts if any single replica passed, not just the
+    # 2/3 majority. Used as the "projects passed" rank signal / display; the strict
+    # 2/3 count still drives the "project pass score".
+    loose_pass_count = sum(1 for project in project_summaries if project.pass_count >= 1)
     return Sn60VariantSummary(
         variant_name=variant_name,
         artifact_path=str(artifact_root),
@@ -724,6 +731,7 @@ def summarize_variant(
         f1_score=f1_score,
         project_summaries=project_summaries,
         replica_results=replica_results,
+        loose_pass_count=loose_pass_count,
     )
 
 

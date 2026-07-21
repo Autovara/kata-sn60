@@ -1184,6 +1184,27 @@ def test_codebase_pass_count_uses_configured_replica_threshold() -> None:
     assert sn60_codebase_pass_count(results) == 1
 
 
+def test_summarize_variant_loose_pass_count_counts_any_replica_pass() -> None:
+    # Project p passes on only 1 of 3 replicas (below the 2/3 gate); project q on none.
+    results = [
+        _replica("p", "PASS"),
+        _replica("p", "FAIL"),
+        _replica("p", "FAIL"),
+        _replica("q", "FAIL"),
+        _replica("q", "FAIL"),
+        _replica("q", "FAIL"),
+    ]
+    summary = summarize_variant(
+        variant_name="king",
+        artifact_root=Path("/tmp/king"),
+        artifact_hash="h",
+        replica_results=results,
+    )
+    # Strict 2/3 gate: neither project passes. Loose: p counts (1 replica passed).
+    assert summary.codebase_pass_count == 0
+    assert summary.loose_pass_count == 1
+
+
 def _scored_replica(
     project_key: str,
     *,

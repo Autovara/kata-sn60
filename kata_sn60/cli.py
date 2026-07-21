@@ -99,6 +99,7 @@ def sn60_variant_detail(variant) -> dict:
         "successful_runs": variant.successful_runs,
         "invalid_runs": variant.invalid_runs,
         "codebase_pass_count": variant.codebase_pass_count,
+        "loose_pass_count": variant.loose_pass_count,
         "projects": [
             {
                 "project_key": project.project_key,
