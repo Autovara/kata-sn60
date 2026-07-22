@@ -14,7 +14,7 @@ services:
       - KATA_ROOM_ENABLE_DIAGNOSTICS=false
       # Signed /run requests are valid for at most 900 seconds. This bounds
       # replay validity; the profile separately caps the agent process below.
-      - KATA_ROOM_MAX_REQUEST_LIFETIME_SECONDS=900
+      - KATA_ROOM_MAX_REQUEST_LIFETIME_SECONDS=${KATA_ROOM_MAX_REQUEST_LIFETIME_SECONDS:-900}
       - KATA_ROOM_MAX_REQUEST_BYTES=1048576
       - KATA_ROOM_MAX_COMPRESSED_BUNDLE_BYTES=524288
       - KATA_ROOM_MAX_EXTRACTED_BUNDLE_BYTES=262144
