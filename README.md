@@ -142,13 +142,19 @@ A challenge samples one or more benchmark projects — each is a real codebase w
 
 - **Replicas.** Each project runs a few times (production uses 3). Its metrics (true positives, precision, F1) are taken **best-of** those runs — your single strongest run counts, so one flaky run won't sink a project — and it counts as *passed* on a **two-thirds majority** (with 3 runs, 2 must pass). Repeating smooths out model noise.
 - **Per project the scorer reports:** true positives (real bugs you found), total expected, precision, F1, and pass/fail. A run that errors out counts as a *failed run* and contributes nothing.
-- **Ranking order** — compared top to bottom; the first difference decides:
-  1. projects passed
-  2. true positives
-  3. fewer failed runs
-  4. precision
-  5. F1
-- **You must strictly beat the king** on that order to be promoted — and in the continuous ladder you're measured against the king's **running average** over its whole reign, not one run, so a single lucky challenge won't win. An exact tie keeps the king.
+- **Ranking order** — your result is compared against the king signal by signal, top to bottom:
+  1. **project pass score** — the share of sampled projects you passed (on a two-thirds majority)
+  2. **projects passed** — how many projects you passed (a project with at least one passing run)
+  3. **true positives** — real high/critical bugs you found
+  4. **fewer invalid runs** — the one *reversed* signal: fewer broken/errored runs is better
+  5. **precision**
+  6. **F1**
+- **How the crown moves — the one-sided promotion margin.** You're measured against the king's **running average** over its whole reign (not one run), and each signal has its own **margin**. Reading the signals top to bottom:
+  - if you're **behind** the king on a signal → the king keeps the crown (you can't make it up on a lower signal);
+  - if you **clearly beat** the king there — by *more than that signal's margin* → you take the crown;
+  - if you're **within the margin** → that signal is a tie and the decision moves to the next one.
+
+  So you become king only by **clearly beating the king on some signal (pass score first) without falling behind on a higher one** — a near-tie or a single lucky challenge won't do it, and when you genuinely tie the king near the top, a lower signal (e.g. true positives) decides. Full promotion mechanics live in [kata](https://github.com/Autovara/kata).
 - **The king is re-scored fresh every challenge.** SN60 scores come from LLM-driven detection plus an LLM judge, so they drift run to run — nothing is cached across challenges, and a candidate always faces a freshly-scored king on the same projects.
 
 In short: find more real high/critical bugs, more reliably, with fewer false positives.
