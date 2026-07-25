@@ -389,6 +389,9 @@ def _sn60_variant_progress(summary: Sn60VariantSummary) -> dict[str, object]:
         "f1_score": summary.f1_score,
         "invalid_runs": summary.invalid_runs,
         "codebase_pass_count": summary.codebase_pass_count,
+        # Per-side inference outcome so the dashboard can attribute a 0 to the real reason (e.g.
+        # this side's provider key is out of credits) instead of a silent zero.
+        "inference_summary": summary.inference_summary,
         "projects": [
             {
                 "project_key": project.project_key,
