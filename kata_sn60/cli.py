@@ -100,6 +100,9 @@ def sn60_variant_detail(variant) -> dict:
         "invalid_runs": variant.invalid_runs,
         "codebase_pass_count": variant.codebase_pass_count,
         "loose_pass_count": variant.loose_pass_count,
+        # Per-side inference outcome (verdict + buckets) so the dashboard can attribute a 0 to the
+        # real reason -- e.g. this side's provider key is out of credits -- via the stdout result.
+        "inference_summary": variant.inference_summary,
         "projects": [
             {
                 "project_key": project.project_key,
