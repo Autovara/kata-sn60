@@ -127,4 +127,10 @@ def parse_sn60_variant_summary(payload: dict[str, object]) -> Sn60VariantSummary
             for item in payload.get("replica_results") or []
             if isinstance(item, dict)
         ],
+        loose_pass_count=int(payload.get("loose_pass_count", 0) or 0),
+        inference_summary=(
+            payload.get("inference_summary")
+            if isinstance(payload.get("inference_summary"), dict)
+            else None
+        ),
     )

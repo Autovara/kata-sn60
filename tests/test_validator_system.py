@@ -199,3 +199,31 @@ def test_padded_digest_is_rejected(monkeypatch) -> None:
         json.dumps({"proj-a": _DIGEST_A, "proj-b": f"  {_DIGEST_C}  "}),
     )
     assert parse_room_runnable_project_keys_from_env() == {"proj-a"}
+
+
+# --- inference-summary aggregation (out-of-credits dashboard warning) ---------------------------
+
+def _replica(inf):
+    from kata_sn60.sn60_bitsec import Sn60ReplicaResult
+    return Sn60ReplicaResult(project_key="p", replica_index=0, report_path="r", evaluation_path="e",
+        execution_success=True, evaluation_status="success", score=0.0, detection_rate=0.0,
+        result=None, true_positives=0, total_expected=1, total_found=0, precision=0.0, f1_score=0.0,
+        inference_summary=inf)
+
+
+def test_aggregate_inference_summary_verdicts():
+    from kata_sn60.sn60_bitsec import aggregate_inference_summary as agg
+    # no room reporting -> None (no warning shown)
+    assert agg([_replica(None)]) is None
+    # all payment_required, no success -> out_of_credits
+    r = agg([_replica({"requests":5,"ok":0,"payment_required":5,"unauthorized":0,"bad_request":0,"unreachable":0,"other":0})])
+    assert r["verdict"] == "out_of_credits" and r["payment_required"] == 5
+    # any success -> ok
+    assert agg([_replica({"requests":3,"ok":1,"payment_required":2}),])["verdict"] == "ok"
+    # 401/403 only -> invalid_key
+    assert agg([_replica({"requests":2,"ok":0,"unauthorized":2})])["verdict"] == "invalid_key"
+    # zero requests but room reported -> agent never called the gateway
+    assert agg([_replica({"requests":0})])["verdict"] == "no_inference"
+    # summed across replicas
+    r = agg([_replica({"requests":2,"payment_required":2}), _replica({"requests":3,"payment_required":3})])
+    assert r["requests"] == 5 and r["payment_required"] == 5 and r["verdict"] == "out_of_credits"

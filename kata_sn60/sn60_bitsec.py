@@ -129,6 +129,9 @@ class Sn60ReplicaResult:
     total_found: int
     precision: float
     f1_score: float
+    # Trusted per-run inference outcome from the room (buckets: ok/payment_required/unauthorized/
+    # bad_request/unreachable). Lets the dashboard explain a 0 (e.g. provider key out of credits).
+    inference_summary: dict | None = None
 
 
 class Sn60EvaluationMetrics(TypedDict):
@@ -180,6 +183,9 @@ class Sn60VariantSummary:
     # Projects on which AT LEAST ONE replica passed (looser than the 2/3-majority
     # ``codebase_pass_count``). Default keeps older records/constructors valid.
     loose_pass_count: int = 0
+    # Variant-level inference outcome (summed buckets + a ``verdict``) so the dashboard can explain
+    # a 0, e.g. this side's provider key is out of credits. ``None`` when the room did not report.
+    inference_summary: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -533,6 +539,46 @@ def sn60_f1_score(precision: float, recall: float) -> float:
     return 2 * precision * recall / total if total > 0 else 0.0
 
 
+def aggregate_inference_summary(replica_results: list[Sn60ReplicaResult]) -> dict | None:
+    """Sum the per-run inference buckets across a variant's replicas and derive a display verdict.
+
+    Returns ``None`` when the room reported nothing (older image) -- no warning is shown then.
+    ``verdict``: ``ok`` (>=1 call succeeded), ``out_of_credits`` (402s, no success),
+    ``invalid_key`` (401/403, no success), ``bad_request`` (400, no success),
+    ``provider_unreachable``, or ``no_inference`` (the agent never called the gateway at all).
+    """
+    keys = ("requests", "ok", "payment_required", "unauthorized", "bad_request",
+            "unreachable", "other")
+    totals = dict.fromkeys(keys, 0)
+    reported = False
+    for result in replica_results:
+        summary = result.inference_summary
+        if isinstance(summary, dict):
+            reported = True
+            for key in keys:
+                try:
+                    totals[key] += int(summary.get(key, 0) or 0)
+                except (TypeError, ValueError):
+                    pass
+    if not reported:
+        return None
+    if totals["requests"] == 0:
+        verdict = "no_inference"
+    elif totals["ok"] > 0:
+        verdict = "ok"
+    elif totals["payment_required"] > 0:
+        verdict = "out_of_credits"
+    elif totals["unauthorized"] > 0:
+        verdict = "invalid_key"
+    elif totals["bad_request"] > 0:
+        verdict = "bad_request"
+    elif totals["unreachable"] > 0:
+        verdict = "provider_unreachable"
+    else:
+        verdict = "unknown"
+    return {**totals, "verdict": verdict}
+
+
 def summarize_variant(
     *,
     variant_name: str,
@@ -588,6 +634,7 @@ def summarize_variant(
         project_summaries=project_summaries,
         replica_results=replica_results,
         loose_pass_count=loose_pass_count,
+        inference_summary=aggregate_inference_summary(replica_results),
     )
 
 
@@ -687,6 +734,11 @@ def build_replica_result(
         total_found=metrics["total_found"],
         precision=metrics["precision"],
         f1_score=metrics["f1_score"],
+        inference_summary=(
+            report_payload.get("_kata_inference_summary")
+            if isinstance(report_payload.get("_kata_inference_summary"), dict)
+            else None
+        ),
     )
 
 
@@ -982,6 +1034,13 @@ def build_tee_room_execution_hook(source: Sn60SandboxSource) -> Sn60ExecutionHoo
         if not outcome.accepted:
             return {"success": False, "error": f"sealed-room run rejected: {outcome.reason}"}
         if isinstance(outcome.report, dict):
+            # Carry the trusted per-run inference summary (from attested room provenance) alongside
+            # the report so build_replica_result can record WHY a run found nothing (e.g. the
+            # miner's provider key returned all 402 => out of credits). Reserved key; scoring
+            # ignores it.
+            summary = (outcome.provenance or {}).get("inference_summary")
+            if isinstance(summary, dict):
+                return {**outcome.report, "_kata_inference_summary": summary}
             return outcome.report
         return {"success": False, "error": "sealed-room report was not a JSON object."}
 

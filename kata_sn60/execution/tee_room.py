@@ -236,6 +236,9 @@ class CandidateOutcome:
     accepted: bool
     report: object | None
     reason: str
+    # Trusted room provenance (attested), incl. the per-run ``inference_summary`` (e.g. all-402 =>
+    # the miner's provider key is out of credits). ``None`` when the run did not reach the room.
+    provenance: dict | None = None
 
 
 def evaluate_candidate_in_room(
@@ -299,7 +302,12 @@ def evaluate_candidate_in_room(
         )
         if not verdict.accepted:
             return CandidateOutcome(False, None, verdict.reason)
-        return CandidateOutcome(True, result.report, "ok")
+        return CandidateOutcome(
+            True,
+            result.report,
+            "ok",
+            provenance=result.provenance if isinstance(result.provenance, dict) else None,
+        )
 
     return CandidateOutcome(False, None, transport_reason)
 
