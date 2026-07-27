@@ -116,13 +116,19 @@ def test_sn60_variant_detail_carries_the_bot_consumed_contract_fields() -> None:
 
 
 def test_top_level_cli_exposes_agent_competition_commands() -> None:
+    """SN60's own subcommand is registered, and every core command it depends on is present.
+
+    A SUBSET check, not equality: the core owns its own command surface and may add commands (it
+    added ``plugin`` for the S3 capacity query), and this repo must not fail because of that. A
+    missing command is still caught, which is the coupling that actually matters here.
+    """
     parser = build_parser()
     subparser_action = next(
         action for action in parser._actions if getattr(action, "choices", None)
     )
     commands = set(subparser_action.choices)
 
-    assert {"king", "submission", "lane", "challenge", "sn60-baseline"} == commands
+    assert {"king", "submission", "lane", "challenge", "sn60-baseline"} <= commands
 
 
 def test_sn60_baseline_cli_is_separate_from_challenge_mode() -> None:
