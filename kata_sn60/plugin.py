@@ -33,6 +33,7 @@ from kata_sn60.sn60_bitsec import (
     build_default_evaluation_hook,
     build_default_execution_hook,
     hash_bundle_root,
+    load_sn60_benchmark_project_keys,
     resolve_sn60_sandbox_source,
     score_variant_on_projects,
     summarize_variant,
@@ -133,6 +134,45 @@ class Sn60BitsecPlugin(SubnetPlugin):
         """Wrap an already-computed variant summary as a ScoreCard (e.g. a screener
         failure) so it ranks uniformly with scored candidates."""
         return self._score_card(summary)
+
+    def capacity_estimate(self, *, config: dict[str, Any]) -> dict[str, float]:
+        """Worst-case ``tee_runs`` this challenge can execute, as a HARD upper bound the platform
+        reserves before the paid phase. Resolved with SN60's OWN config sourcing so it cannot
+        diverge from what ``sample_problems`` selects:
+
+          tee_runs = projects x replicas x (king + one candidate) x room_attempts
+
+        ``projects`` is the exact configured key set when keys are pinned, else the FULL
+        room-runnable benchmark (an upper bound on any sampled subset -- no random sampling /
+        sample-secret needed for a bound). Every factor over-approximates real usage. Raises if the
+        effective benchmark cannot be resolved (the platform then fails closed)."""
+        from kata_sn60.execution.tee_room import resolve_room_max_attempts
+        from kata_sn60.validator_system.project_selection import (
+            parse_room_runnable_project_keys_from_env,
+            parse_sn60_project_keys_from_env,
+        )
+
+        explicit = config.get("project_keys") or parse_sn60_project_keys_from_env()
+        if explicit:
+            n_projects = len(explicit)
+        else:
+            source = resolve_sn60_sandbox_source(
+                sandbox_root=config.get("sandbox_root"),
+                benchmark_file=config.get("benchmark_file"),
+                sandbox_commit=config.get("sandbox_commit"),
+                scorer_version=self._scorer_version,
+            )
+            keys = load_sn60_benchmark_project_keys(source)
+            room_runnable = parse_room_runnable_project_keys_from_env()
+            if room_runnable is not None:
+                keys = [k for k in keys if k in room_runnable]
+            n_projects = len(keys)
+        replicas = int(config.get("replicas_per_project", 1) or 1)
+        if replicas <= 0:
+            replicas = 1
+        attempts = resolve_room_max_attempts()
+        tee_runs = max(1, n_projects) * max(1, replicas) * 2 * max(1, attempts)
+        return {"tee_runs": float(tee_runs)}
 
     def sample_problems(self, *, seed: str, config: dict[str, Any]) -> Sn60Problems:
         sandbox_source = resolve_sn60_sandbox_source(
