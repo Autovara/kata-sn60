@@ -322,6 +322,38 @@ class Sn60BitsecPlugin(SubnetPlugin):
         decision = evaluate_sn60_promotion(king=king.payload, candidate=candidate.payload)
         return decision.promotion_ready
 
+    def conformance_scorecards(self) -> tuple[ScoreCard, ScoreCard]:
+        """Side-effect-free weak/strong cards for the trusted installer's ordering gate.
+
+        SN60's comparator intentionally ranks its native summary payload rather than only
+        ``ScoreCard.comparable``. A generic empty card therefore cannot exercise the real decision
+        surface. These summaries contain no benchmark data and perform no TEE/inference work.
+        """
+
+        def _summary(name: str, true_positives: int) -> Sn60VariantSummary:
+            return Sn60VariantSummary(
+                variant_name=name,
+                artifact_path=f"/conformance/{name}",
+                artifact_hash=name,
+                successful_runs=1,
+                invalid_runs=0,
+                pass_count=0,
+                codebase_pass_count=0,
+                aggregated_score=0.0,
+                average_detection_rate=0.0,
+                true_positives=true_positives,
+                total_expected=10,
+                total_found=true_positives,
+                precision=true_positives / 10,
+                f1_score=true_positives / 10,
+                project_summaries=[],
+                replica_results=[],
+            )
+
+        return self._score_card(_summary("weak", 1)), self._score_card(
+            _summary("strong", 9)
+        )
+
     def static_screen(self, submission_path: str) -> list | None:
         """SN60 subnet-specific static anti-cheat (benchmark-leak / forbidden tokens).
 

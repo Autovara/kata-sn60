@@ -186,6 +186,18 @@ def test_sn60_plugin_scores_rank_and_beat_king_match_engine(tmp_path: Path) -> N
     assert cards["cand-c"].payload is not None
 
 
+def test_conformance_scorecards_exercise_native_sn60_ordering_without_backend() -> None:
+    plugin = _plugin()
+    weak, strong = plugin.conformance_scorecards()
+
+    assert plugin.compare(weak, strong) < 0
+    assert plugin.compare(strong, weak) > 0
+    assert plugin.compare(weak, weak) == 0
+    assert plugin.beats_king(strong, None) is True
+    assert plugin.beats_king(strong, weak) is True
+    assert plugin.beats_king(weak, strong) is False
+
+
 def test_candidate_cache_reuses_scored_projects_on_resume(tmp_path: Path) -> None:
     # A durable candidate scoreboard lets an interrupted challenge that resumes
     # during the candidate phase skip re-running (and re-paying for) candidate
