@@ -943,7 +943,8 @@ def test_summarize_project_uses_best_of_successful_replicas() -> None:
         replica_results=[
             _scored_replica("p", true_positives=5, total_expected=10, total_found=8),
             _scored_replica("p", true_positives=7, total_expected=10, total_found=9),
-            _scored_replica("p", true_positives=0, total_expected=10, total_found=0, status="error"),
+            _scored_replica("p", true_positives=0, total_expected=10, total_found=0,
+                            status="error"),
         ],
     )
     assert project.true_positives == 7  # best-of, not the 12 a pooled sum would give
@@ -960,9 +961,12 @@ def test_project_pass_needs_two_of_three_total_replicas() -> None:
     project = summarize_project(
         project_key="p",
         replica_results=[
-            _scored_replica("p", true_positives=10, total_expected=10, total_found=10, result="PASS"),
-            _scored_replica("p", true_positives=0, total_expected=10, total_found=0, status="error"),
-            _scored_replica("p", true_positives=0, total_expected=10, total_found=0, status="error"),
+            _scored_replica("p", true_positives=10, total_expected=10, total_found=10,
+                            result="PASS"),
+            _scored_replica("p", true_positives=0, total_expected=10, total_found=0,
+                            status="error"),
+            _scored_replica("p", true_positives=0, total_expected=10, total_found=0,
+                            status="error"),
         ],
     )
     assert project.passed is False
@@ -974,9 +978,12 @@ def test_project_pass_needs_two_of_three_total_replicas() -> None:
     project2 = summarize_project(
         project_key="q",
         replica_results=[
-            _scored_replica("q", true_positives=10, total_expected=10, total_found=10, result="PASS"),
-            _scored_replica("q", true_positives=10, total_expected=10, total_found=10, result="PASS"),
-            _scored_replica("q", true_positives=0, total_expected=10, total_found=0, status="error"),
+            _scored_replica("q", true_positives=10, total_expected=10, total_found=10,
+                            result="PASS"),
+            _scored_replica("q", true_positives=10, total_expected=10, total_found=10,
+                            result="PASS"),
+            _scored_replica("q", true_positives=0, total_expected=10, total_found=0,
+                            status="error"),
         ],
     )
     assert project2.passed is True

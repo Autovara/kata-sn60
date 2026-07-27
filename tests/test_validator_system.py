@@ -216,7 +216,8 @@ def test_aggregate_inference_summary_verdicts():
     # no room reporting -> None (no warning shown)
     assert agg([_replica(None)]) is None
     # all payment_required, no success -> out_of_credits
-    r = agg([_replica({"requests":5,"ok":0,"payment_required":5,"unauthorized":0,"bad_request":0,"unreachable":0,"other":0})])
+    r = agg([_replica({"requests": 5, "ok": 0, "payment_required": 5, "unauthorized": 0,
+                       "bad_request": 0, "unreachable": 0, "other": 0})])
     assert r["verdict"] == "out_of_credits" and r["payment_required"] == 5
     # any success -> ok
     assert agg([_replica({"requests":3,"ok":1,"payment_required":2}),])["verdict"] == "ok"
@@ -225,5 +226,6 @@ def test_aggregate_inference_summary_verdicts():
     # zero requests but room reported -> agent never called the gateway
     assert agg([_replica({"requests":0})])["verdict"] == "no_inference"
     # summed across replicas
-    r = agg([_replica({"requests":2,"payment_required":2}), _replica({"requests":3,"payment_required":3})])
+    r = agg([_replica({"requests":2,"payment_required":2}),
+        _replica({"requests":3,"payment_required":3})])
     assert r["requests"] == 5 and r["payment_required"] == 5 and r["verdict"] == "out_of_credits"
