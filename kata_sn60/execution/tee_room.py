@@ -31,6 +31,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Protocol
 
 # A room run is retried only on transient TRANSPORT failures: a connection reset/
@@ -50,12 +51,27 @@ class RoomTransportError(RuntimeError):
     rejects a reused nonce.
     """
 
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+def _open_room(request, *, timeout: float):
+    return urllib.request.build_opener(_RejectRedirects).open(request, timeout=timeout)
+
+
 # Shared HMAC secret the room requires on /run (room.auth). Must match the room's
 # KATA_ROOM_AUTH_SECRET so only this validator can invoke a run.
 ROOM_AUTH_SECRET_ENV = "KATA_ROOM_AUTH_SECRET"
 ROOM_SIGNATURE_HEADER = "X-Kata-Signature"
 ROOM_HTTP_TIMEOUT_ENV = "KATA_SN60_ROOM_HTTP_TIMEOUT_SECONDS"
 DEFAULT_ROOM_HTTP_TIMEOUT_SECONDS = 900.0
+MAX_ROOM_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_BUNDLE_BYTES = 256 * 1024
+MAX_BUNDLE_FILES = 16
+SEALED_CREDENTIAL_FILENAME = "sealed_inference_key"
+_BUNDLE_BINDING_DOMAIN = b"kata-miner-credential-bundle-v1\0"
 
 
 def room_signature(body: bytes) -> str:
@@ -147,19 +163,17 @@ def verify_room_run(
 class DcapQvlVerifier:
     """Verify a TDX quote with the dcap-qvl Python package.
 
-    `parse_quote()` gives report_data + the TD measurement registers; `verify()` checks the
-    signature/TCB against Intel/Phala PCCS collateral. The runner image is identified by
-    RTMR3 (the app/compose measurement; MRTD/RTMR0-2 are firmware/OS shared by all dstack
-    apps), overridable via KATA_SN60_ROOM_MEASUREMENT_REGISTER.
-
-    CONFIRM on real hardware (A6 step 0): the exact collateral-fetch call, the attribute
-    names (`report_data`, `rt_mr3`), and which TCB statuses to accept. Those are the only
-    unknowns; the surrounding logic is tested.
+    dcap-qvl 0.5.x exposes TDX fields through ``parse_quote().report`` and verifies the signature,
+    certificate chain, revocation state and TCB against PCCS collateral. The stable dstack image
+    identity is the compose hash stored in ``mr_config_id[1:33]``; per-instance RTMR values are not
+    suitable allowlist identities.
     """
 
-    ACCEPT_STATUS = frozenset(
-        {"UpToDate", "SWHardeningNeeded", "ConfigurationAndSWHardeningNeeded"}
-    )
+    ACCEPT_STATUS = frozenset({"OK", "SW_HARDENING_NEEDED"})
+    STATUS_ALIASES = {
+        "UpToDate": "OK",
+        "SWHardeningNeeded": "SW_HARDENING_NEEDED",
+    }
 
     def verify(self, quote_hex: str) -> VerifiedQuote:
         try:
@@ -173,17 +187,22 @@ class DcapQvlVerifier:
 
             raw = bytes.fromhex(quote_hex)
             parsed = dcap_qvl.parse_quote(raw)
+            if hasattr(parsed, "is_tdx") and not parsed.is_tdx():
+                return VerifiedQuote(False, b"", "", "quote is not TDX")
             report = parsed.report
-            report_data = report.report_data
+            report_data = bytes(report.report_data)
             # Approved-image identity = the dstack COMPOSE-HASH (stable across redeploys),
             # encoded in mr_config_id (byte 0 = version tag, bytes 1..33 = compose-hash).
             # rt_mr3 is NOT usable: it folds in per-instance app-id/instance-id, so it
             # changes on every deployment. Override via KATA_SN60_ROOM_MEASUREMENT_REGISTER.
             register = _os.environ.get("KATA_SN60_ROOM_MEASUREMENT_REGISTER", "compose_hash")
             if register == "compose_hash":
-                measurement = report.mr_config_id[1:33].hex()
+                mr_config_id = bytes(report.mr_config_id)
+                if len(mr_config_id) < 33:
+                    return VerifiedQuote(False, report_data, "", "mr_config_id is incomplete")
+                measurement = mr_config_id[1:33].hex()
             else:
-                measurement = getattr(report, register).hex()
+                measurement = bytes(getattr(report, register)).hex()
             import asyncio as _asyncio
             import inspect as _inspect
 
@@ -199,12 +218,52 @@ class DcapQvlVerifier:
                 return v
 
             verified = _asyncio.run(_collateral_and_verify())
-            status = getattr(verified, "status", "")
+            raw_status = str(getattr(verified, "status", ""))
+            status = self.STATUS_ALIASES.get(raw_status, raw_status)
             if status not in self.ACCEPT_STATUS:
-                return VerifiedQuote(False, report_data, measurement, f"tcb status {status}")
+                return VerifiedQuote(False, report_data, measurement, f"tcb status {raw_status}")
             return VerifiedQuote(True, report_data, measurement, "ok")
         except Exception as exc:  # noqa: BLE001
             return VerifiedQuote(False, b"", "", f"dcap-qvl error: {exc}")
+
+
+def verify_room_identity(
+    base_url: str,
+    *,
+    policy: RoomPolicy,
+    verifier: QuoteVerifier,
+    timeout: float = 15.0,
+) -> None:
+    """Check room health and prove that its published sealing key is quote-bound."""
+    base = base_url.rstrip("/")
+    try:
+        with _open_room(f"{base}/health", timeout=timeout) as response:
+            health = json.loads(response.read().decode())
+        if not isinstance(health, dict) or health.get("ok") is not True:
+            raise RuntimeError("room /health did not report ok")
+        with _open_room(f"{base}/pubkey", timeout=timeout) as response:
+            document = json.loads(response.read().decode())
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise RuntimeError(f"cannot reach the SN60 room health endpoints: {exc}") from exc
+    if not isinstance(document, dict):
+        raise RuntimeError("room /pubkey returned a non-object response")
+    public_key = document.get("pubkey")
+    quote_hex = document.get("quote")
+    if (
+        not isinstance(public_key, str)
+        or len(public_key) != 66
+        or not all(char in "0123456789abcdef" for char in public_key)
+        or not isinstance(quote_hex, str)
+    ):
+        raise RuntimeError("room /pubkey returned an invalid key or quote")
+    quote = verifier.verify(quote_hex)
+    if not quote.ok:
+        raise RuntimeError(f"room /pubkey quote was not verified: {quote.detail}")
+    if quote.measurement not in policy.approved_measurements:
+        raise RuntimeError(f"room /pubkey measurement is not approved: {quote.measurement}")
+    expected = hashlib.sha256(b"kata-sealing-pubkey:" + bytes.fromhex(public_key)).digest()
+    if not hmac.compare_digest(quote.report_data[:32], expected):
+        raise RuntimeError("room /pubkey quote does not bind the published sealing key")
 
 
 # -- run a candidate in a room -----------------------------------------------
@@ -312,22 +371,61 @@ def evaluate_candidate_in_room(
     return CandidateOutcome(False, None, transport_reason)
 
 
+def _bundle_files(root: Path) -> list[Path]:
+    if not root.is_dir():
+        raise RuntimeError(f"candidate bundle does not exist: {root}")
+    files: list[Path] = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if any(part in {".git", "__pycache__"} for part in relative.parts):
+            continue
+        if path.is_symlink():
+            raise RuntimeError(f"candidate bundle contains a symlink: {relative}")
+        if path.is_file() and path.suffix not in {".pyc", ".pyo"}:
+            files.append(path)
+            if len(files) > MAX_BUNDLE_FILES:
+                raise RuntimeError(
+                    f"candidate bundle exceeds the {MAX_BUNDLE_FILES}-file room policy"
+                )
+    if sum(path.stat().st_size for path in files) > MAX_BUNDLE_BYTES:
+        raise RuntimeError(
+            f"candidate bundle exceeds the {MAX_BUNDLE_BYTES}-byte room policy"
+        )
+    return files
+
+
+def hash_room_bundle(bundle_root: str | Path) -> str:
+    """Hash the executable bundle using the room's credential-binding format."""
+    root = Path(bundle_root).expanduser().resolve()
+    files = _bundle_files(root)
+    if not files:
+        raise RuntimeError("candidate bundle is empty")
+    digest = hashlib.sha256(_BUNDLE_BINDING_DOMAIN)
+    for path in files:
+        relative = path.relative_to(root).as_posix()
+        if relative == SEALED_CREDENTIAL_FILENAME:
+            continue
+        encoded_path = relative.encode()
+        content = path.read_bytes()
+        digest.update(len(encoded_path).to_bytes(4, "big"))
+        digest.update(encoded_path)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
 def _bundle_tar_b64(bundle_root: str) -> str:
-    """Tar+gzip+base64 the candidate's submission bundle so the room can run the real
-    agent. Excludes caches/VCS noise; the room extracts it to /kata_bundle."""
+    """Tar+gzip+base64 the bounded candidate bundle for execution in the room."""
     import base64
     import io
     import tarfile
 
-    def _keep(ti: "tarfile.TarInfo"):
-        n = ti.name
-        if "__pycache__" in n or n.endswith((".pyc", ".pyo")) or "/.git" in n or n == "./.git":
-            return None
-        return ti
-
+    root = Path(bundle_root).expanduser().resolve()
+    files = _bundle_files(root)
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-        tf.add(bundle_root, arcname=".", filter=_keep)
+        for path in files:
+            tf.add(path, arcname=path.relative_to(root).as_posix(), recursive=False)
     return base64.b64encode(buf.getvalue()).decode()
 
 
@@ -373,10 +471,13 @@ class HttpRoomLauncher:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                data = json.loads(resp.read().decode())
+            with _open_room(req, timeout=self.timeout) as resp:
+                raw_response = resp.read(MAX_ROOM_RESPONSE_BYTES + 1)
+            if len(raw_response) > MAX_ROOM_RESPONSE_BYTES:
+                raise RuntimeError("room response exceeds the 4 MiB safety limit")
+            data = json.loads(raw_response.decode())
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode(errors="replace")[:400]
+            body = exc.read(401).decode(errors="replace")[:400]
             # 502/503/504 are transient gateway/proxy failures -> retryable.
             if exc.code in _RETRYABLE_ROOM_HTTP_STATUS:
                 raise RoomTransportError(f"room HTTP {exc.code}: {body}") from exc
@@ -392,7 +493,8 @@ class HttpRoomLauncher:
             reason = getattr(exc, "reason", exc)
             raise RoomTransportError(f"could not reach room: {reason}") from exc
         if (
-            "report" not in data
+            not isinstance(data, dict)
+            or "report" not in data
             or "quote" not in data
             or data.get("bundle_sha256") != bundle_sha256
             or not isinstance(data.get("provenance"), dict)

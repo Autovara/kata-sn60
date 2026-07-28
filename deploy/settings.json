@@ -7,15 +7,13 @@
     "the registry's; naming one here is refused outright, not ignored.",
     "subnet_id and lane_id below are an ASSERTION, not an input: they are checked against the",
     "registry lane so pointing the generator at the wrong checkout fails loudly.",
-    "KATA_SUBNET_BUDGET_TEE_RUNS is the dimension capacity_estimate actually reserves, and it was missing: without it kata_bot.budget treats TEE runs as unconstrained, which is the one dimension every SN60 round spends. Worst case for one challenge is projects x replicas x 2 contestants x room attempts = 7 x 3 x 2 x 3 = 126, so 1260 is ten challenges a day. Recalculate it whenever the sample size, replica count or attempt ceiling changes -- the four move together."
+    "KATA_SUBNET_BUDGET_TEE_RUNS is the hard dimension capacity_estimate reserves. Worst case for one challenge is projects x replicas x 2 contestants x room attempts = 7 x 3 x 2 x 3 = 126, so 1260 is ten challenges a day. Recalculate it whenever the sample size, replica count or attempt ceiling changes -- the four move together. Inference and provider spend are miner-funded inside the room, so validator inference_calls/spend_usd caps would be fictional and are intentionally absent."
   ],
   "schema_version": 1,
   "subnet_id": 60,
   "lane_id": "sn60__bitsec",
   "challenge_config": {},
   "lane_env": {
-    "KATA_SUBNET_BUDGET_INFERENCE_CALLS": "500",
-    "KATA_SUBNET_BUDGET_SPEND_USD": "25.0",
     "KATA_SUBNET_BUDGET_TEE_RUNS": "1260"
   },
   "unit_params": {

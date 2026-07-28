@@ -151,6 +151,10 @@ class Sn60TeeProfile:
             f"INFERENCE_API_KEY={inference_key}",
             "-e",
             f"INFERENCE_API={inference_api}",
+            "-e",
+            "REPORT_FILE=/kata_output/report.json",
+            "-e",
+            "PYTHONDONTWRITEBYTECODE=1",
         ]
         try:
             with tempfile.TemporaryDirectory() as directory:
@@ -165,6 +169,13 @@ class Sn60TeeProfile:
                         container,
                         "--network",
                         INF_NET,
+                        "--read-only",
+                        "--cap-drop",
+                        "ALL",
+                        "--security-opt",
+                        "no-new-privileges",
+                        "--user",
+                        "65532:65532",
                         *env_args,
                         "--memory",
                         "512m",
@@ -172,6 +183,10 @@ class Sn60TeeProfile:
                         "0.25",
                         "--pids-limit",
                         "64",
+                        "--tmpfs",
+                        "/tmp:rw,noexec,nosuid,size=64m,uid=65532,gid=65532,mode=700",
+                        "--tmpfs",
+                        "/kata_output:rw,noexec,nosuid,size=4m,uid=65532,gid=65532,mode=700",
                         image,
                     ]
                 )
@@ -188,7 +203,7 @@ class Sn60TeeProfile:
                     timeout=resolve_agent_execution_timeout_seconds(),
                 )  # -a waits for exit
                 cp_out = docker(
-                    ["cp", f"{container}:/app/report.json", str(workdir / "report.json")]
+                    ["cp", f"{container}:/kata_output/report.json", str(workdir / "report.json")]
                 )
                 if cp_out.returncode != 0:
                     raise RuntimeError(

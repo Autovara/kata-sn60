@@ -7,6 +7,7 @@ subnet-neutral.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -35,6 +36,8 @@ from kata_sn60.sn60_bitsec import (
     build_default_execution_hook,
     hash_bundle_root,
     load_sn60_benchmark_project_keys,
+    resolve_sn60_room_policy,
+    resolve_sn60_room_url,
     resolve_sn60_sandbox_source,
     score_variant_on_projects,
     summarize_variant,
@@ -190,12 +193,32 @@ class Sn60BitsecPlugin(SubnetPlugin):
         a fraction of the configured work rather than refusing.
         """
         issues: list[dict[str, str]] = []
-        for check in (self._preflight_project_keys, self._preflight_replicas):
+        checks = [self._preflight_project_keys, self._preflight_replicas]
+        if self.environment_spec().execution == "tee":
+            checks.append(self._preflight_room)
+        for check in checks:
             try:
                 check()
-            except (ValueError, OSError) as exc:
+            except (RuntimeError, ValueError, OSError) as exc:
                 issues.append({"level": "error", "message": str(exc)})
         return issues
+
+    @staticmethod
+    def _preflight_room() -> None:
+        from kata_sn60.execution.tee_room import (
+            ROOM_AUTH_SECRET_ENV,
+            DcapQvlVerifier,
+            verify_room_identity,
+        )
+
+        if not os.environ.get(ROOM_AUTH_SECRET_ENV, "").strip():
+            raise RuntimeError(
+                f"{ROOM_AUTH_SECRET_ENV} is required to authenticate SN60 room runs")
+        verify_room_identity(
+            resolve_sn60_room_url(),
+            policy=resolve_sn60_room_policy(),
+            verifier=DcapQvlVerifier(),
+        )
 
     def _preflight_project_keys(self) -> None:
         resolve_sn60_project_keys(

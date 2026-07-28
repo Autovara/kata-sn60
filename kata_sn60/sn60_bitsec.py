@@ -965,13 +965,22 @@ def build_default_execution_hook(
 
 
 def resolve_sn60_room_url() -> str:
-    url = os.environ.get("KATA_SN60_ROOM_URL", "").strip()
+    url = os.environ.get("KATA_SN60_ROOM_URL", "").strip().rstrip("/")
     if not url:
         raise RuntimeError("TEE execution requires KATA_SN60_ROOM_URL")
     parsed = urlparse(url)
     allow_insecure = os.environ.get("KATA_SN60_ALLOW_INSECURE_ROOM_URL", "").strip().lower()
-    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
-        raise RuntimeError("KATA_SN60_ROOM_URL must be an absolute HTTPS URL")
+    if (
+        parsed.scheme not in {"https", "http"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError(
+            "KATA_SN60_ROOM_URL must be an absolute HTTPS URL without embedded credentials"
+        )
     if parsed.scheme != "https" and allow_insecure not in {"1", "true", "yes", "on"}:
         raise RuntimeError(
             "KATA_SN60_ROOM_URL must use HTTPS (set "
@@ -988,6 +997,16 @@ def resolve_sn60_room_policy():
     if not measurements:
         raise RuntimeError(
             "KATA_SN60_ROOM_MEASUREMENTS must list the approved runner image measurement(s)"
+        )
+    invalid = sorted(
+        measurement
+        for measurement in measurements
+        if len(measurement) != 64
+        or any(character not in "0123456789abcdef" for character in measurement)
+    )
+    if invalid:
+        raise RuntimeError(
+            "KATA_SN60_ROOM_MEASUREMENTS values must be 64 lowercase hexadecimal characters"
         )
     return RoomPolicy(approved_measurements=measurements)
 
@@ -1010,6 +1029,7 @@ def build_tee_room_execution_hook(source: Sn60SandboxSource) -> Sn60ExecutionHoo
         DcapQvlVerifier,
         HttpRoomLauncher,
         evaluate_candidate_in_room,
+        hash_room_bundle,
     )
 
     launcher = HttpRoomLauncher(resolve_sn60_room_url())
@@ -1025,7 +1045,7 @@ def build_tee_room_execution_hook(source: Sn60SandboxSource) -> Sn60ExecutionHoo
             project_key=context.project_key,
             sealed_key_ref=sealed_key,
             mint_nonce=lambda: os.urandom(20),
-            bundle_sha256=hash_bundle_root(Path(context.bundle_root)),
+            bundle_sha256=hash_room_bundle(context.bundle_root),
             policy=policy,
             launcher=launcher,
             verifier=verifier,

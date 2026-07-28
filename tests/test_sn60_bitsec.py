@@ -20,6 +20,8 @@ from kata_sn60.sn60_bitsec import (
     project_passes,
     resolve_sn60_inference_api,
     resolve_sn60_proxy_network,
+    resolve_sn60_room_policy,
+    resolve_sn60_room_url,
     resolve_sn60_sandbox_source,
     sn60_container_name,
     sn60_synthetic_ids,
@@ -679,6 +681,43 @@ def test_resolve_sn60_proxy_network_defaults_and_overrides(monkeypatch) -> None:
     assert resolve_sn60_proxy_network() == "bitsec-net"
     monkeypatch.setenv("KATA_SN60_PROXY_NETWORK", "kata-secret-net")
     assert resolve_sn60_proxy_network() == "kata-secret-net"
+
+
+def test_sn60_room_configuration_is_strict_and_canonical(monkeypatch) -> None:
+    measurement = "ab" * 32
+    monkeypatch.setenv("KATA_SN60_ROOM_URL", "https://room.example/")
+    monkeypatch.setenv("KATA_SN60_ROOM_MEASUREMENTS", measurement)
+
+    assert resolve_sn60_room_url() == "https://room.example"
+    assert resolve_sn60_room_policy().approved_measurements == frozenset({measurement})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "room.example",
+        "ftp://room.example",
+        "https://user:password@room.example",
+        "https://:password@room.example",
+        "https://room.example?redirect=https://evil.example",
+        "https://room.example#fragment",
+        "http://room.example",
+    ],
+)
+def test_sn60_room_url_rejects_unsafe_values(monkeypatch, url: str) -> None:
+    monkeypatch.setenv("KATA_SN60_ROOM_URL", url)
+    monkeypatch.delenv("KATA_SN60_ALLOW_INSECURE_ROOM_URL", raising=False)
+    with pytest.raises(RuntimeError, match="KATA_SN60_ROOM_URL"):
+        resolve_sn60_room_url()
+
+
+@pytest.mark.parametrize("measurement", ["abc", "AB" * 32, "gg" * 32])
+def test_sn60_room_policy_rejects_malformed_measurements(
+    monkeypatch, measurement: str
+) -> None:
+    monkeypatch.setenv("KATA_SN60_ROOM_MEASUREMENTS", measurement)
+    with pytest.raises(RuntimeError, match="64 lowercase hexadecimal"):
+        resolve_sn60_room_policy()
 
 
 def test_build_bitsec_execution_command_uses_configured_endpoint(tmp_path: Path) -> None:

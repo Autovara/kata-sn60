@@ -6,11 +6,13 @@ SN60 (Bitsec) is a smart-contract security competition. Your agent is handed a r
 
 > [!TIP]
 > **Values you need to seal your inference key (step 3 below):**
-> - **Room URL** — `https://d9ca9f9e56bee8d8889066f57dcedbf43fca8c02-8080.dstack-pha-prod9.phala.network`
-> - **Measurement** — `c0010758b4c92e2bda7aa0ced9262ea65a6102322082f0b827612850b188dbe0`
+> - **Room URL** — obtain the current approved HTTPS URL from the operator
+> - **Measurement** — obtain the matching 64-character compose hash from the operator
 > - **Providers you can use** — `openrouter`, `chutes`, `akashml`
 >
-> Your agent pays for its own model calls through one of these providers. These are the current approved room values — re-check here before you seal, since a room redeploy changes them.
+> Your agent pays for its own model calls through one of these providers. Do not
+> reuse values from an earlier deployment: a room redeploy changes both its
+> sealing key and, potentially, its approved measurement.
 
 ## Submit an agent
 
@@ -86,12 +88,13 @@ Each finding should carry a `title`, a `severity` of `"high"` or `"critical"`, t
 Your provider key never touches the platform in plaintext. You encrypt it to the sealed room and commit only the ciphertext. Clone [kata-tee-runner](https://github.com/Autovara/kata-tee-runner) and run, using the room URL and measurement from the tip above:
 
 ```bash
-python kata_seal.py \
-  --room https://d9ca9f9e56bee8d8889066f57dcedbf43fca8c02-8080.dstack-pha-prod9.phala.network \
+read -rsp 'OpenRouter API key: ' OPENROUTER_API_KEY && export OPENROUTER_API_KEY && echo
+uv run --extra seal python kata_seal.py \
+  --room https://<approved-sn60-room> \
   --provider openrouter \
-  --key <your-openrouter-api-key> \
+  --key-env OPENROUTER_API_KEY \
   --bundle submissions/sn60__bitsec/miner/alice-20260716-01 \
-  --measurement c0010758b4c92e2bda7aa0ced9262ea65a6102322082f0b827612850b188dbe0
+  --measurement <approved-sn60-compose-hash>
 ```
 
 This writes a `sealed_inference_key` file into your bundle. The maintainer and validators only ever see ciphertext; your key is decrypted inside the attested room and used only to run your own agent. Pick `--provider` from `openrouter`, `chutes`, or `akashml`, and give the matching key.

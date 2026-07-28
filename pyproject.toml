@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
   "kata",
   # TDX quote verification for the sealed-room (TEE) SN60 execution path.
-  "dcap-qvl>=0.5",
+  "dcap-qvl==0.5.3",
 ]
 
 [project.optional-dependencies]

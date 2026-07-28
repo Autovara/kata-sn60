@@ -5,25 +5,31 @@ Uses fake launcher/verifier so the whole flow is testable without a real TEE.
 
 import hashlib
 import hmac
+import sys
 import tarfile
 from base64 import b64decode
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from kata_sn60.execution.tee_room import (
     DEFAULT_ROOM_HTTP_TIMEOUT_SECONDS,
+    MAX_BUNDLE_BYTES,
     ROOM_AUTH_SECRET_ENV,
     ROOM_HTTP_TIMEOUT_ENV,
+    DcapQvlVerifier,
     HttpRoomLauncher,
     RoomPolicy,
     RoomResult,
     RoomTransportError,
     VerifiedQuote,
     _bundle_tar_b64,
+    _RejectRedirects,
     canonical,
     evaluate_candidate_in_room,
+    hash_room_bundle,
     resolve_room_http_timeout_seconds,
     room_signature,
     verify_room_run,
@@ -62,6 +68,45 @@ def test_room_signature_requires_the_shared_secret(monkeypatch):
         room_signature(b"x")
 
 
+def test_room_http_client_refuses_redirects() -> None:
+    assert (
+        _RejectRedirects().redirect_request(
+            None, None, 307, "redirect", {}, "https://evil.example"
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "accepted"),
+    [
+        ("OK", True),
+        ("SW_HARDENING_NEEDED", True),
+        ("CONFIGURATION_NEEDED", False),
+        ("OUT_OF_DATE", False),
+    ],
+)
+def test_dcap_verifier_uses_the_pinned_status_contract(monkeypatch, status, accepted):
+    measurement = "ab" * 32
+    report = SimpleNamespace(
+        report_data=b"\x11" * 64,
+        mr_config_id=b"\x01" + bytes.fromhex(measurement),
+    )
+    parsed = SimpleNamespace(report=report, is_tdx=lambda: True)
+    fake_qvl = SimpleNamespace(
+        PHALA_PCCS_URL="https://pccs.example",
+        parse_quote=lambda _raw: parsed,
+        get_collateral=lambda _url, _raw: object(),
+        verify=lambda _raw, _collateral, _now: SimpleNamespace(status=status),
+    )
+    monkeypatch.setitem(sys.modules, "dcap_qvl", fake_qvl)
+
+    result = DcapQvlVerifier().verify("00")
+
+    assert result.ok is accepted
+    assert result.measurement == measurement
+
+
 def test_bundle_transfer_excludes_transient_local_files(tmp_path: Path) -> None:
     bundle = tmp_path / "submission"
     bundle.mkdir()
@@ -82,6 +127,46 @@ def test_bundle_transfer_excludes_transient_local_files(tmp_path: Path) -> None:
     assert not any("__pycache__" in name for name in names)
     assert not any(name.endswith((".pyc", ".pyo")) for name in names)
     assert not any(name == ".git" or name.startswith(".git/") for name in names)
+
+
+def test_bundle_transfer_refuses_symlinks_and_oversized_payloads(tmp_path: Path) -> None:
+    symlinked = tmp_path / "symlinked"
+    symlinked.mkdir()
+    (symlinked / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (symlinked / "escape").symlink_to("/etc/passwd")
+    with pytest.raises(RuntimeError, match="symlink"):
+        _bundle_tar_b64(str(symlinked))
+
+    oversized = tmp_path / "oversized"
+    oversized.mkdir()
+    (oversized / "agent.py").write_bytes(b"x" * (MAX_BUNDLE_BYTES + 1))
+    with pytest.raises(RuntimeError, match="byte room policy"):
+        _bundle_tar_b64(str(oversized))
+
+
+def test_room_bundle_hash_matches_sealing_binding_and_excludes_ciphertext(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "submission"
+    bundle.mkdir()
+    source = b"def agent_main(): return {'ok': True}\n"
+    (bundle / "agent.py").write_bytes(source)
+    sealed = bundle / "sealed_inference_key"
+    sealed.write_text("aa" * 64, encoding="utf-8")
+
+    digest = hashlib.sha256(b"kata-miner-credential-bundle-v1\0")
+    name = b"agent.py"
+    digest.update(len(name).to_bytes(4, "big"))
+    digest.update(name)
+    digest.update(len(source).to_bytes(8, "big"))
+    digest.update(source)
+    expected = digest.hexdigest()
+
+    assert hash_room_bundle(bundle) == expected
+    sealed.write_text("bb" * 64, encoding="utf-8")
+    assert hash_room_bundle(bundle) == expected
+    (bundle / "agent.py").write_bytes(source + b"# changed\n")
+    assert hash_room_bundle(bundle) != expected
 
 
 def test_stage_bundle_preserves_submission_metadata_and_source_bytes(tmp_path: Path) -> None:

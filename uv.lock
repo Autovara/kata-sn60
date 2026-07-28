@@ -64,7 +64,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dcap-qvl", specifier = ">=0.5" },
+    { name = "dcap-qvl", specifier = "==0.5.3" },
     { name = "kata", editable = "../kata" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },

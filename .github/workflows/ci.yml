@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: kata-sn60
+      - uses: actions/checkout@v4
+        with:
+          repository: Autovara/kata
+          path: kata
+      - uses: actions/checkout@v4
+        with:
+          repository: Autovara/kata-tee-runner
+          path: kata-tee-runner
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv run --extra dev ruff check kata_sn60 tests
+        working-directory: kata-sn60
+      - run: uv run --extra dev pytest -q
+        working-directory: kata-sn60
