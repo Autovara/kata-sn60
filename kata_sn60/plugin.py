@@ -23,6 +23,7 @@ from kata.plugins.contract import (
 from kata_sn60.execution.policy import tee_execution_enabled
 from kata_sn60.king_cache import benchmark_version_key
 from kata_sn60.sn60_bitsec import (
+    DEFAULT_REPLICAS_PER_PROJECT,
     Sn60EvaluationHook,
     Sn60ExecutionHook,
     Sn60ReplicaResult,
@@ -48,7 +49,10 @@ from kata_sn60.validator_system.challenge import (
     sn60_pass_score,
     sn60_variant_rank,
 )
-from kata_sn60.validator_system.project_selection import resolve_sn60_project_keys
+from kata_sn60.validator_system.project_selection import (
+    parse_sn60_replicas_per_project_from_env,
+    resolve_sn60_project_keys,
+)
 
 DEFAULT_SCORER_VERSION = "ScaBenchScorerV2"
 
@@ -167,12 +171,58 @@ class Sn60BitsecPlugin(SubnetPlugin):
             if room_runnable is not None:
                 keys = [k for k in keys if k in room_runnable]
             n_projects = len(keys)
-        replicas = int(config.get("replicas_per_project", 1) or 1)
-        if replicas <= 0:
-            replicas = 1
+        # The SAME replica resolution ``sample_problems`` uses. Reading it differently here would
+        # reserve budget for fewer runs than the challenge goes on to execute.
+        replicas = self._replicas_per_project(config)
         attempts = resolve_room_max_attempts()
         tee_runs = max(1, n_projects) * max(1, replicas) * 2 * max(1, attempts)
         return {"tee_runs": float(tee_runs)}
+
+    def preflight(self) -> list[dict[str, str]]:
+        """Would this deployment's SN60 project selection succeed?
+
+        Answered by RUNNING the real selection rather than restating its rules, so preflight and
+        the round can never disagree. Selection is fail-closed and side-effect free -- it reads the
+        benchmark, applies the room's pinned digest map (or the docker probe), and samples -- so
+        asking it here costs a benchmark read and answers exactly what the round will do.
+
+        The replica count is checked the same way, because an unusable value there silently scored
+        a fraction of the configured work rather than refusing.
+        """
+        issues: list[dict[str, str]] = []
+        for check in (self._preflight_project_keys, self._preflight_replicas):
+            try:
+                check()
+            except (ValueError, OSError) as exc:
+                issues.append({"level": "error", "message": str(exc)})
+        return issues
+
+    def _preflight_project_keys(self) -> None:
+        resolve_sn60_project_keys(
+            configured_keys=None,
+            sandbox_root=None,
+            benchmark_file=None,
+            sandbox_commit=None,
+        )
+
+    def _preflight_replicas(self) -> None:
+        parse_sn60_replicas_per_project_from_env()
+
+    def _replicas_per_project(self, config: dict[str, Any]) -> int:
+        """Replicas per project: the challenge config if it says, else the deployment env.
+
+        The env fallback is what lets the resident stop deciding this. It used to read
+        ``KATA_SN60_REPLICAS_PER_PROJECT`` itself and pass the answer down; when it passed nothing
+        the value silently fell back to 1, so a deployment configured for 3 replicas quietly scored
+        a third of the work it was configured for.
+        """
+        configured = config.get("replicas_per_project")
+        if configured is None:
+            configured = parse_sn60_replicas_per_project_from_env() or DEFAULT_REPLICAS_PER_PROJECT
+        replicas = int(configured)
+        if replicas <= 0:
+            raise ValueError("SN60 replicas_per_project must be positive.")
+        return replicas
 
     def sample_problems(self, *, seed: str, config: dict[str, Any]) -> Sn60Problems:
         sandbox_source = resolve_sn60_sandbox_source(
@@ -192,9 +242,7 @@ class Sn60BitsecPlugin(SubnetPlugin):
             normalized_project_keys,
             sandbox_source=sandbox_source,
         )
-        replicas_per_project = int(config.get("replicas_per_project", 1))
-        if replicas_per_project <= 0:
-            raise ValueError("SN60 replicas_per_project must be positive.")
+        replicas_per_project = self._replicas_per_project(config)
         return Sn60Problems(
             project_keys=normalized_project_keys,
             sandbox_source=sandbox_source,
