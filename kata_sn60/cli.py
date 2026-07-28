@@ -183,6 +183,76 @@ def register_sn60_cli(subparsers) -> None:
     )
     baseline_cmd.set_defaults(handler=handle_sn60_baseline)
 
+    compare_cmd = subparsers.add_parser(
+        "sn60-baseline-compare",
+        help="Build the SN60 baseline-vs-Kata comparison and its operator report.",
+    )
+    compare_cmd.add_argument("--challenge-result", required=True,
+                             help="Path to the challenge_result.json being compared.")
+    compare_cmd.add_argument("--baseline-result", required=True,
+                             help="Path to the proof-only baseline result JSON.")
+    compare_cmd.add_argument(
+        "--challenge-status", default=None,
+        help="challenge-status.json for that challenge, for running this by hand from the two "
+             "saved artifacts. The validator embeds the status in --challenge-result instead.")
+    compare_cmd.add_argument("--json", action="store_true")
+    compare_cmd.set_defaults(handler=handle_sn60_baseline_compare)
+
+    env_cmd = subparsers.add_parser(
+        "sn60-baseline-env",
+        help="The environment overrides a proof-only SN60 baseline run needs.",
+    )
+    env_cmd.add_argument("--json", action="store_true")
+    env_cmd.set_defaults(handler=handle_sn60_baseline_env)
+
+
+def handle_sn60_baseline_compare(args) -> int:
+    """Build the comparison and its markdown, for the resident to write out.
+
+    The resident holds the two result documents already; what it does not hold is SN60's opinion
+    about which metrics matter and how the report reads. It asks here rather than importing plugin
+    code, because a plugin imported by the resident could read bot and webhook credentials.
+    """
+    import json as _json
+
+    from kata.cli import print_json
+
+    from kata_sn60.baseline_report import (
+        build_sn60_baseline_comparison,
+        render_sn60_baseline_comparison_markdown,
+    )
+
+    def _read(path):
+        if not path:
+            return {}
+        try:
+            payload = _json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    challenge = _read(args.challenge_result)
+    if args.challenge_status:
+        challenge = {**challenge, "_challenge_status": _read(args.challenge_status)}
+    comparison = build_sn60_baseline_comparison(
+        source_challenge=challenge, baseline=_read(args.baseline_result)
+    )
+    print_json({
+        "comparison": comparison,
+        "report_markdown": render_sn60_baseline_comparison_markdown(comparison),
+    })
+    return 0
+
+
+def handle_sn60_baseline_env(args) -> int:
+    """The env overrides a proof-only baseline run needs (screener off, timeout floor)."""
+    from kata.cli import print_json
+
+    from kata_sn60.baseline_report import sn60_baseline_env_overrides
+
+    print_json({"env_overrides": sn60_baseline_env_overrides()})
+    return 0
+
 
 def handle_sn60_baseline(args) -> int:
     from kata.cli import parse_challenge_candidate, print_json
