@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "SN60's deployment settings. Read by kata-subnets-deploy's installer, which validates every",
+    "value against its allowlist and ceilings before rendering any unit. This file may set only",
+    "what a subnet decides for itself: challenge sizing, its own budget caps, and round timing.",
+    "Lane identity, source repo, plugin path, entry point, writable paths and public visibility are",
+    "the registry's; naming one here is refused outright, not ignored.",
+    "subnet_id and lane_id below are an ASSERTION, not an input: they are checked against the",
+    "registry lane so pointing the generator at the wrong checkout fails loudly."
+  ],
+  "schema_version": 1,
+  "subnet_id": 60,
+  "lane_id": "sn60__bitsec",
+
+  "challenge_config": {},
+
+  "lane_env": {
+    "KATA_SUBNET_BUDGET_INFERENCE_CALLS": "500",
+    "KATA_SUBNET_BUDGET_SPEND_USD": "25.0"
+  },
+
+  "unit_params": {
+    "timeout_start_sec": 5400,
+    "round_gap_sec": 180,
+    "requires_docker": true
+  }
+}
