@@ -1,40 +1,68 @@
 services:
   kata-sn60-runner:
-    # Digest, not a mutable tag: the value must match the approved TEE measurement policy.
-    image: ${KATA_SN60_RUNNER_IMAGE:?Set an immutable runner image, for example registry/runner@sha256:...}
+    # Public security policy is literal in this manifest so Phala's compose measurement commits to
+    # the exact runner, project images, provider routes, and execution bounds.
+    image: ghcr.io/autovara/kata-sn60-runner@sha256:1019643932462708923608a32761d49069d93b57f3152a93413463929983d90d
     ports:
       # Phala exposes this port through its HTTPS gateway so the external validator can reach the
       # room. /health and /pubkey are public; /run requires a signed, short-lived HMAC request.
       - "8080:8080"
     environment:
-      # Shared secret the room requires on /run so only this validator can invoke a run
-      # (delivered sealed, like the other secrets). Must match the validator's KATA_ROOM_AUTH_SECRET.
-      - KATA_ROOM_AUTH_SECRET=${KATA_ROOM_AUTH_SECRET}
+      # Actual credentials remain Phala Encrypted Secrets and are intentionally not measured.
+      KATA_ROOM_AUTH_SECRET: ${KATA_ROOM_AUTH_SECRET:?Set KATA_ROOM_AUTH_SECRET}
       # Keep diagnostics off in production. /pull-test is otherwise a signed POST-only endpoint.
-      - KATA_ROOM_ENABLE_DIAGNOSTICS=false
-      # Signed /run requests are valid for at most 900 seconds. This bounds
-      # replay validity; the profile separately caps the agent process below.
-      - KATA_ROOM_MAX_REQUEST_LIFETIME_SECONDS=${KATA_ROOM_MAX_REQUEST_LIFETIME_SECONDS:-900}
-      - KATA_ROOM_MAX_REQUEST_BYTES=1048576
-      - KATA_ROOM_MAX_COMPRESSED_BUNDLE_BYTES=524288
-      - KATA_ROOM_MAX_EXTRACTED_BUNDLE_BYTES=262144
-      - KATA_ROOM_MAX_BUNDLE_FILES=16
+      KATA_ROOM_ENABLE_DIAGNOSTICS: "false"
+      # Signed /run requests are valid for a bounded period; the profile separately caps the agent.
+      KATA_ROOM_MAX_REQUEST_LIFETIME_SECONDS: "900"
+      KATA_ROOM_MAX_REQUEST_BYTES: "1048576"
+      KATA_ROOM_MAX_COMPRESSED_BUNDLE_BYTES: "524288"
+      KATA_ROOM_MAX_EXTRACTED_BUNDLE_BYTES: "262144"
+      KATA_ROOM_MAX_BUNDLE_FILES: "16"
       # NOTE: there is intentionally NO plaintext INFERENCE_API_KEY here — inference keys arrive
       # per request, sealed to the room, and are decrypted inside it (see room.sealing).
-      # Registry read:packages login to pull the private problem image (sealed secret).
-      - GHCR_USER=${GHCR_USER}
-      - GHCR_TOKEN=${GHCR_TOKEN}
+      # Registry package-read login used to pull approved private problem images.
+      GHCR_USER: "autovara"
+      GHCR_TOKEN: ${GHCR_TOKEN:?Set GHCR_TOKEN}
       # JSON map: each allowed project key -> sha256:<64 hex>. There is no :latest fallback.
-      - KATA_SN60_TEE_IMAGE_DIGESTS_JSON=${KATA_SN60_TEE_IMAGE_DIGESTS_JSON}
+      KATA_SN60_TEE_IMAGE_DIGESTS_JSON: >-
+        {
+          "cantina_generic-money_2025_11": "sha256:b186c5734884112e3424dd13e113bb3cd9f8ba426f80ab2ab4b01567d0a9a9c5",
+          "cantina_minimal-delegation_2025_04": "sha256:3926fe14600a1cb4c9c5f81a84882267895fbca75c2482c5ec6a8b43a7afdaf8",
+          "cantina_smart-contract-audit-of-tn-contracts_2025_08": "sha256:8dbba637540b9a9de35c9194b8942ede2b3c5d2011b9e9c09b3811c4f2ec9fea",
+          "code4rena_bakerfi-invitational_2025_02": "sha256:d3d6956e30b4f4aa8cf75ded1350d5c0ff6bf964f5fde018b028ac1b5e1cbea4",
+          "code4rena_coded-estate-invitational_2024_12": "sha256:2619999693d3e9f78653e4c5ace0f9901a7b7eea295adb70727dc00a82290250",
+          "code4rena_fenix-finance-invitational_2024_10": "sha256:dfe7811dbc07e8189d09a4f8fd3096c3a343313ef3f2db117296e9a79af6fab1",
+          "code4rena_forte-float128-solidity-library_2025_04": "sha256:89f6a6070b04f09aac6b86167abb958b82b525c7043e13c081f8b5840605bdc4",
+          "code4rena_initia-move_2025_04": "sha256:22939cff3bbcd0c01d992a8cc1b5fdbb50cd36a09f3b44dabbfe31f71a440165",
+          "code4rena_kinetiq_2025_07": "sha256:e07198340b40dd2c770a04ef215053dfdbbbb82405274c5d57429318a328c623",
+          "code4rena_lambowin_2025_02": "sha256:e2038b268a6e22f602d46aa203647b6dece5fdac8066d891ae69d6644ca1ce0a",
+          "code4rena_loopfi_2025_02": "sha256:91602b3cb211670411e2dfdc7ec748b1fee831265ddf34fa431c121afe99072b",
+          "code4rena_mantra-dex_2025_03": "sha256:fba76df79070dede5911978ab6b0f6c1cdc9d25cb60e3ba370f85a445da05939",
+          "code4rena_next-generation_2025_05": "sha256:a3b2545d7a1f165271dc808c281d5f1d71ed17d68a1df858612c63970fb630d2",
+          "code4rena_pump-science_2025_02": "sha256:9c0a38e3690a5dbd91e7dca03e42314b6cf39aca4305733a9bc4680e7106eb70",
+          "code4rena_secondswap_2025_02": "sha256:2c8fc632fd5cdd4e9790d180cd7280f369ede6f4a44f3648394bfc8166d74637",
+          "code4rena_starknet-perpetual_2025_06": "sha256:ded0ca827a5ecd01f748840626ca43a71ee4c6127563ab41de73245cd522db91",
+          "code4rena_superposition_2025_01": "sha256:12bd39e0734b2e00a2127bf2d3694789ea4494354fbf46d9e762c26da0c4bdc5",
+          "code4rena_virtuals-protocol_2025_08": "sha256:cc5099d5e934fa977f6f83b961d1f111936d4cc9018d3d54b6c4b0bfc1807f3c",
+          "sherlock_axion_2025_01": "sha256:98a8a67cad4a31062acdaa2a3554dffd21e7422491d7829cfdeced15edbb0778",
+          "sherlock_oku_2024_12": "sha256:c56ea8fa78a07a33bae1b18a86d0d6249bda61598b17a0b3dbdce89b1b1af4e4",
+          "sherlock_perennial_v2_update_3_2024_08": "sha256:0c273446fdfaadd36dd88ab4921b2c258478804db99b47baa2c9c4ebe2363456",
+          "sherlock_symmio_2025_03": "sha256:898de017c7f1f2f1b284db12e41073b2c7c5375186c55ef16fa7f2d29b76652d"
+        }
       # --- in-room miner-funded multi-provider gateway ---
       # JSON registry of exact, operator-approved provider routes. Each miner's encrypted descriptor
       # selects one id from this registry; the miner never supplies an arbitrary endpoint or plaintext
       # key. The gateway does not set a model, sampling policy, token/call budget, or retry budget.
-      - KATA_INFERENCE_GATEWAY_PROVIDER_ROUTES_JSON=${KATA_INFERENCE_GATEWAY_PROVIDER_ROUTES_JSON}
+      KATA_INFERENCE_GATEWAY_PROVIDER_ROUTES_JSON: >-
+        {
+          "openrouter": {"upstream": "https://openrouter.ai/api/v1/chat/completions"},
+          "chutes": {"upstream": "https://llm.chutes.ai/v1/chat/completions"},
+          "akashml": {"upstream": "https://api.akashml.com/v1/chat/completions"}
+        }
       # One miner-funded upstream call is bounded independently from the whole
-      # agent process. These defaults form 180s < 840s < 900s.
-      - KATA_INFERENCE_GATEWAY_TIMEOUT=${KATA_INFERENCE_GATEWAY_TIMEOUT:-180}
-      - KATA_TEE_AGENT_EXECUTION_TIMEOUT_SECONDS=${KATA_TEE_AGENT_EXECUTION_TIMEOUT_SECONDS:-840}
+      # agent process. Production values form 180s < 840s < 900s.
+      KATA_INFERENCE_GATEWAY_TIMEOUT: "180"
+      KATA_TEE_AGENT_EXECUTION_TIMEOUT_SECONDS: "840"
     volumes:
       # dstack guest-agent socket -- lets the app call get_quote.
       - /var/run/dstack.sock:/var/run/dstack.sock

@@ -12,35 +12,41 @@ inference-key fallback.
      PYTHON_BASE=python:3.12-slim@sha256:<approved-digest> ./build.sh v1 --push)
    ```
 
-2. Build the SN60 layer from the pushed generic room digest, then deploy the final pushed image by
-   its digest (not the `v1`/`vN` tag):
+2. Build the SN60 layer from the pushed generic room digest:
 
    ```bash
    BASE=registry/kata-tee-runner@sha256:<approved-digest> ./build.sh v1 --push
-   export KATA_SN60_RUNNER_IMAGE=registry/kata-sn60-runner@sha256:<approved-digest>
    ```
 
-3. In Phala, configure registry credentials for `ghcr.io` before startup. The pre-launch script
-   reads `DSTACK_DOCKER_REGISTRY`, `DSTACK_DOCKER_USERNAME`, and `DSTACK_DOCKER_PASSWORD` to pull
-   the outer SN60 runner image. Separately deliver `KATA_ROOM_AUTH_SECRET`, `GHCR_USER`, and
-   `GHCR_TOKEN` as sealed secrets to the running room; those credentials let it pull an approved
-   private problem image. The two logins happen at different stages and may use the same
-   package-read token.
+3. Review `docker-compose.yml` before every release. It contains the literal runner digest,
+   project-image digest allowlist, provider routes, and execution bounds so Phala's compose
+   measurement commits to the complete public security policy. Updating any of those values
+   requires editing and redeploying the manifest, then approving its new measurement.
 
-4. Set `KATA_SN60_TEE_IMAGE_DIGESTS_JSON` to a JSON object mapping every permitted Bitsec project
-   key to its GHCR `sha256:<digest>`. Configure the generic runner's provider registry with
-   `KATA_INFERENCE_GATEWAY_PROVIDER_ROUTES_JSON`. It maps reviewed provider ids to exact endpoints
-   and authentication formats. For example, it may enable `openrouter`, `chutes`, and `akashml`
-   simultaneously. The gateway forwards each miner's own request, model, sampling, token, and call
-   settings unchanged to the route selected by that miner's encrypted descriptor. Never accept a
-   miner-supplied provider URL.
+4. Upload `docker-compose.yml` to Phala and configure only the complete credential set as
+   Encrypted Secrets:
+
+   ```dotenv
+   KATA_ROOM_AUTH_SECRET=<random 32-byte secret shared with the validator>
+   GHCR_TOKEN=<package-read token used inside the room>
+   DSTACK_DOCKER_REGISTRY=ghcr.io
+   DSTACK_DOCKER_USERNAME=<registry username>
+   DSTACK_DOCKER_PASSWORD=<package-read token used by the pre-launch image pull>
+   ```
+
+   Phala's pre-launch script consumes the `DSTACK_DOCKER_*` credentials to pull the private outer
+   runner image. The running room consumes `GHCR_TOKEN` to pull approved private problem images.
+   The two logins happen at different stages and may use the same least-privilege package-read
+   token. Encrypted Secret updates replace the entire set, so always submit all five entries
+   together. Never put these credential values in the Compose manifest or repository.
 
 5. In Phala, allow gateway port `8080` and use its HTTPS endpoint as `KATA_SN60_ROOM_URL`. The
    Compose file deliberately exposes `8080:8080` for this external validator-to-room connection.
    `/health` and `/pubkey` are public, while `/run` accepts only signed, short-lived, one-time HMAC
    requests using `KATA_ROOM_AUTH_SECRET`.
 
-6. Allowlist the final image's TEE measurement in the validator's
+6. Verify the new room's quote and confirm the attested Compose manifest contains the reviewed
+   literal runner and project-image digests. Allowlist its compose measurement in the validator's
    `KATA_SN60_ROOM_MEASUREMENTS`, configure the validator with an HTTPS `KATA_SN60_ROOM_URL`, and
    give both sides the same `KATA_ROOM_AUTH_SECRET`.
 
