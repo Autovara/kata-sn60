@@ -7,7 +7,11 @@
     "the registry's; naming one here is refused outright, not ignored.",
     "subnet_id and lane_id below are an ASSERTION, not an input: they are checked against the",
     "registry lane so pointing the generator at the wrong checkout fails loudly.",
-    "KATA_SUBNET_BUDGET_TEE_RUNS is the hard dimension capacity_estimate reserves. Worst case for one challenge is projects x replicas x 2 contestants x room attempts = 7 x 3 x 2 x 3 = 126, so 1260 is ten challenges a day. Recalculate it whenever the sample size, replica count or attempt ceiling changes -- the four move together. Inference and provider spend are miner-funded inside the room, so validator inference_calls/spend_usd caps would be fictional and are intentionally absent."
+    "KATA_SUBNET_BUDGET_TEE_RUNS is the hard dimension capacity_estimate reserves. Worst case for one challenge is projects x replicas x 2 contestants x room attempts = 7 x 3 x 2 x 3 = 126, so 1260 is ten challenges a day. Recalculate it whenever the sample size, replica count or attempt ceiling changes -- the four move together. Inference and provider spend are miner-funded inside the room, so validator inference_calls/spend_usd caps would be fictional and are intentionally absent.",
+    "",
+    "submission_policy is THIS SUBNET's answer to a question the competition repository's PR gate has to ask: may a submission reach the network itself? Declared here because it is a property of this subnet's agent contract, not of the gate.",
+    "",
+    "The gate cannot import this repository -- it runs on a bare Python with no pip install -- so kata-subnets-deploy publishes this into the competition repo as data. See docs/contracts.md."
   ],
   "schema_version": 1,
   "subnet_id": 60,
@@ -20,5 +24,10 @@
     "timeout_start_sec": 5400,
     "round_gap_sec": 180,
     "requires_docker": true
+  },
+  "submission_policy": {
+    "direct_network_allowed": true,
+    "banned_source_markers": [],
+    "banned_source_reason": ""
   }
 }
