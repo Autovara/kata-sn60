@@ -136,6 +136,36 @@ screening is labeled `kata:pending` and enters the SN60 challenge queue.
 - `agent.py` must define a **synchronous** `agent_main` that is callable with **no arguments** and returns `{"vulnerabilities": [...]}`.
 - Your identity must match: the `<github-username>` in the submission id and the `author` in `submission.json` must both equal the GitHub account that opens the PR.
 
+## SN60 workflow at a glance
+
+```mermaid
+flowchart TD
+    A[Build the agent bundle] --> B[Seal the provider key]
+    B --> C[Run local validation]
+    C --> D[Open an SN60 pull request]
+    D --> E{Intake and static screening}
+
+    E -->|Hard failure| X[Close as kata:invalid]
+    E -->|Needs human review| R[Hold as kata:review]
+    E -->|Pass| P[Queue as kata:pending]
+
+    P --> S{Runtime screening}
+    S -->|Invalid output or agent failure| X
+    S -->|Pass| H[Run candidate and king<br/>7 secret projects x 3 replicas]
+
+    H --> I[Score every replica]
+    I --> J[Aggregate project and challenge signals]
+    J --> K{Candidate beats the<br/>king running average?}
+
+    K -->|No| L[Close as kata:losing]
+    K -->|Yes| V{Scored state still current?}
+    V -->|No| M[Hold for maintainer]
+    V -->|Yes| W[Merge PR and promote<br/>the exact candidate bundle]
+```
+
+Platform or room-capacity interruptions do not follow the losing branch. The
+PR remains pending and the challenge is retried when the lane is available.
+
 ## Validation and screening
 
 Every PR passes these SN60 checks before full scoring:
