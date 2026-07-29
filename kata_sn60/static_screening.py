@@ -11,9 +11,14 @@ from pathlib import Path
 
 from kata.ast_utils import (
     count_module_function_defs,
+    count_module_scope_name_bindings,
+    declares_global_binding,
     find_module_async_function_def,
     find_module_function_def,
     function_supports_no_arg_invocation,
+    has_module_scope_star_import,
+    rebinds_name_dynamically,
+    unbinds_module_scope_name,
 )
 from kata.screening.models import ScreeningFinding, dedupe_findings
 from kata.screening.python_ast import (
@@ -144,7 +149,65 @@ def screen_sn60_static_bundle(bundle_files: dict[str, str]) -> list[ScreeningFin
         )
         return dedupe_findings(findings)
 
+    # Same reasoning as the duplicate-`def` rule above, extended to every OTHER way a module
+    # global is bound. Counting only top-level `def`s left `sn60.direct_constant_report` -- the
+    # check that detects a hardcoded answer bank, the exact incident class this screening exists
+    # for -- inspecting a decoy while the runner executed the rebound function.
+    #
+    # The analysis lives in kata.ast_utils so this file and kata/screening/rules.py cannot drift
+    # into two different ideas of what "the entrypoint" means.
+    if (
+        count_module_scope_name_bindings(tree, "agent_main") > 1
+        or declares_global_binding(tree, "agent_main")
+        or rebinds_name_dynamically(tree, "agent_main")
+    ):
+        findings.append(
+            reject_finding(
+                "sn60.agent_main_rebound",
+                "Submission binds agent_main more than once, or replaces it through the module "
+                "namespace. Define it exactly once with a plain `def`: screening validates that "
+                "definition and the runner executes whatever the name is bound to last.",
+                path=AGENT_ENTRY_FILENAME,
+            )
+        )
+        return dedupe_findings(findings)
+
+    if unbinds_module_scope_name(tree, "agent_main"):
+        findings.append(
+            reject_finding(
+                "sn60.agent_main_deleted",
+                "Submission deletes agent_main after defining it. Whatever answers for the name "
+                "afterwards -- a module __getattr__, for instance -- is not the definition "
+                "screening validated.",
+                path=AGENT_ENTRY_FILENAME,
+            )
+        )
+        return dedupe_findings(findings)
+
+    if has_module_scope_star_import(tree):
+        findings.append(
+            reject_finding(
+                "sn60.agent_main_star_import",
+                "Submission uses `from ... import *` at module scope, which can rebind agent_main "
+                "invisibly. Import the names you need explicitly.",
+                path=AGENT_ENTRY_FILENAME,
+            )
+        )
+        return dedupe_findings(findings)
+
     agent_main = find_module_function_def(tree, "agent_main")
+    if agent_main is not None and agent_main.decorator_list:
+        findings.append(
+            reject_finding(
+                "sn60.agent_main_decorated",
+                "Submission decorates agent_main. A decorator returns a different object from the "
+                "function screening validated, so the entrypoint must be undecorated.",
+                path=AGENT_ENTRY_FILENAME,
+                line=agent_main.lineno,
+            )
+        )
+        return dedupe_findings(findings)
+
     if agent_main is None:
         if find_module_async_function_def(tree, "agent_main") is not None:
             findings.append(
