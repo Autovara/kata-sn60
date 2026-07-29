@@ -72,6 +72,30 @@ def _cleanup_resources(container: str, staging: str, volumes: tuple[str, ...]) -
         raise RuntimeError("; ".join(errors))
 
 
+def _missing_report_error(detail: str) -> bool:
+    """Whether ``docker cp`` failed because the agent did not create its report."""
+
+    normalized = detail.lower()
+    return (
+        "could not find the file /kata_output/report.json" in normalized
+        or "stat /kata_output/report.json: no such file or directory" in normalized
+    )
+
+
+def _agent_failure(*, image: str, job_id: str, error: str) -> TeeJobResult:
+    """Return a candidate-owned failure that the generic room will bind into its quote."""
+
+    return TeeJobResult(
+        report={"success": False, "error": error},
+        provenance={
+            "profile": "sn60-bitsec-v1",
+            "project_image": image,
+            "inference_policy": "miner-controlled",
+            "job_id": job_id,
+        },
+    )
+
+
 class Sn60TeeProfile:
     fixture_project = "fixture-project"
 
@@ -323,21 +347,50 @@ class Sn60TeeProfile:
                 )
                 if start.returncode != 0:
                     raise RuntimeError(f"start failed: {_docker_error(start)}")
-                wait = docker(
-                    ["wait", container],
-                    timeout=resolve_agent_execution_timeout_seconds(),
-                )
+                execution_timeout = resolve_agent_execution_timeout_seconds()
+                try:
+                    wait = docker(
+                        ["wait", container],
+                        timeout=execution_timeout,
+                    )
+                except subprocess.TimeoutExpired:
+                    return _agent_failure(
+                        image=image,
+                        job_id=job_id,
+                        error=(
+                            "Bitsec agent execution timed out after "
+                            f"{execution_timeout:g} seconds."
+                        ),
+                    )
                 if wait.returncode != 0:
                     raise RuntimeError(f"wait failed: {_docker_error(wait)}")
                 cp_out = docker(
                     ["cp", f"{staging}:/kata_output/report.json", str(workdir / "report.json")]
                 )
                 if cp_out.returncode != 0:
-                    raise RuntimeError(
-                        "no report.json. "
-                        f"agent exit: {(wait.stdout or '').strip()[:100]}"
+                    detail = _docker_error(cp_out)
+                    if not _missing_report_error(detail):
+                        raise RuntimeError(f"copy report out failed: {detail}")
+                    return _agent_failure(
+                        image=image,
+                        job_id=job_id,
+                        error=(
+                            "Bitsec agent completed without writing report.json. "
+                            f"Agent exit: {(wait.stdout or '').strip()[:100]}"
+                        ),
                     )
-                report = json.loads((workdir / "report.json").read_text())
+                try:
+                    report = json.loads((workdir / "report.json").read_text())
+                except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                    report = {
+                        "success": False,
+                        "error": "Bitsec agent report.json was not valid JSON.",
+                    }
+                if not isinstance(report, dict):
+                    report = {
+                        "success": False,
+                        "error": "Bitsec agent report.json was not a JSON object.",
+                    }
             digest = docker(
                 ["inspect", "--format", "{{index .RepoDigests 0}}", image]
             ).stdout.strip()

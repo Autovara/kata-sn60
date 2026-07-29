@@ -23,6 +23,7 @@ from kata.submissions.bundle import (
 from kata.util import write_json
 
 from kata_sn60 import sandbox_snapshot
+from kata_sn60.execution.errors import Sn60ExecutionInfrastructureError
 from kata_sn60.execution.policy import tee_execution_enabled
 from kata_sn60.king_cache import (
     KingScoreboard,
@@ -997,13 +998,15 @@ def build_default_execution_hook(
                 completed.stderr,
                 completed.stdout,
             )
+            error = (
+                f"Bitsec execution command failed with exit code {completed.returncode}: "
+                f"{completed.stderr.strip() or completed.stdout.strip()}"
+            )
+            if infrastructure_error:
+                raise Sn60ExecutionInfrastructureError(error)
             return {
                 "success": False,
-                "infrastructure_error": infrastructure_error,
-                "error": (
-                    f"Bitsec execution command failed with exit code {completed.returncode}: "
-                    f"{completed.stderr.strip() or completed.stdout.strip()}"
-                ),
+                "error": error,
             }
         return {
             "success": False,
@@ -1101,7 +1104,13 @@ def build_tee_room_execution_hook(source: Sn60SandboxSource) -> Sn60ExecutionHoo
             seen_nonces=seen_nonces,
         )
         if not outcome.accepted:
-            return {"success": False, "error": f"sealed-room run rejected: {outcome.reason}"}
+            # A rejection before an attested report exists is not evidence about the candidate.
+            # It covers room HTTP failures, exhausted transport retries, invalid/missing quotes,
+            # an unapproved measurement, and a broken room protocol.  Abort the challenge so the
+            # competition driver preserves the entrant instead of manufacturing an invalid score.
+            raise Sn60ExecutionInfrastructureError(
+                f"sealed-room run rejected: {outcome.reason}"
+            )
         if isinstance(outcome.report, dict):
             # Carry the trusted per-run inference summary (from attested room provenance) alongside
             # the report so build_replica_result can record WHY a run found nothing (e.g. the

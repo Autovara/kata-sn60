@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from kata.screening import screen_submission
 from kata.screening.models import ScreeningFinding
 from kata.screening.rules import (
@@ -11,6 +12,7 @@ from kata.screening.rules import (
     screen_submission_bundle_files,
 )
 
+from kata_sn60.execution.errors import Sn60ExecutionInfrastructureError
 from kata_sn60.llm_review import resolve_llm_benchmark_file
 from kata_sn60.sn60_bitsec import Sn60ReplicaContext, resolve_sn60_sandbox_source
 from kata_sn60.validator_system.screening import (
@@ -889,6 +891,32 @@ def test_run_sn60_screening_rejects_bad_execution_report(tmp_path: Path) -> None
     assert result.stage == SN60_SCREENING_STAGE_EXECUTION
     assert any("top-level `vulnerabilities` list" in reason for reason in result.reasons)
     assert Path(result.report_path or "").exists()
+
+
+def test_run_sn60_screening_propagates_infrastructure_failure(tmp_path: Path) -> None:
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = write_sandbox_source(sandbox_root)
+    source = resolve_sn60_sandbox_source(
+        sandbox_root=str(sandbox_root),
+        benchmark_file=str(benchmark_path),
+        sandbox_commit="commit-1",
+        scorer_version="ScaBenchScorerV2",
+    )
+    bundle_root = tmp_path / "candidate"
+    write_bundle(bundle_root, VALID_AGENT_SOURCE)
+
+    def execute(_context: Sn60ReplicaContext) -> dict[str, object]:
+        raise Sn60ExecutionInfrastructureError("room HTTP 500: Docker daemon failed")
+
+    with pytest.raises(Sn60ExecutionInfrastructureError, match="Docker daemon failed"):
+        run_sn60_screening(
+            candidate_artifact_path=str(bundle_root),
+            project_key="project-alpha",
+            output_root=str(tmp_path / "runs"),
+            sandbox_source=source,
+            execution_hook=execute,
+            run_static_checks=False,
+        )
 
 
 def test_validate_sn60_static_screening_rejects_expanded_leak_tokens(

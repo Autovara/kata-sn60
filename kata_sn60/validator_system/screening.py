@@ -14,6 +14,7 @@ from typing import Callable
 
 from kata.util import dedupe, write_json
 
+from kata_sn60.execution.errors import Sn60ExecutionInfrastructureError
 from kata_sn60.execution.policy import tee_execution_enabled
 from kata_sn60.sn60_bitsec import (
     Sn60ReplicaContext,
@@ -197,6 +198,11 @@ def run_sn60_screening(
     execute = execution_hook or build_default_screening_execution_hook(sandbox_source)
     try:
         report_payload = execute(context)
+    except Sn60ExecutionInfrastructureError:
+        # There is no attested candidate result to screen.  Let the challenge driver restore the
+        # PR to pending; converting this exception into a failed report would blame the miner for
+        # a validator/room outage.
+        raise
     except Exception as exc:
         report_payload = {
             "success": False,

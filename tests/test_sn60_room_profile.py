@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -112,3 +113,108 @@ def test_real_sn60_agent_container_is_fail_closed_and_resource_bounded(
         for command in calls
     )
     assert result.report == {"vulnerabilities": []}
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("timeout", "execution timed out"),
+        ("missing-report", "without writing report.json"),
+        ("malformed-report", "was not a JSON object"),
+    ],
+)
+def test_agent_runtime_failures_return_attested_report_payloads(
+    monkeypatch, tmp_path: Path, failure: str, message: str
+) -> None:
+    """Candidate-owned runtime failures become reports; room/Docker failures still raise."""
+
+    profile_module = _load_profile()
+    digest = "ab" * 32
+    project = "project-a"
+    image = f"ghcr.io/bitsec-ai/{project}@sha256:{digest}"
+    monkeypatch.setenv(
+        "KATA_SN60_TEE_IMAGE_DIGESTS_JSON",
+        json.dumps({project: f"sha256:{digest}"}),
+    )
+    monkeypatch.setattr(profile_module, "ghcr_login", lambda: None)
+    monkeypatch.setattr(profile_module, "start_inference_gateway_once", lambda: None)
+    monkeypatch.setattr(profile_module, "ensure_inference_network_once", lambda: None)
+
+    class Completed:
+        def __init__(self, returncode=0, *, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_docker(args, **_kwargs):
+        command = list(args)
+        if command[0] == "wait" and failure == "timeout":
+            raise subprocess.TimeoutExpired(command, 840)
+        if command[0] == "cp" and ":/kata_output/report.json" in command[1]:
+            if failure == "missing-report":
+                return Completed(
+                    1,
+                    stderr=(
+                        "Error response from daemon: Could not find the file "
+                        "/kata_output/report.json in container"
+                    ),
+                )
+            Path(command[2]).write_text("[]", encoding="utf-8")
+        if command[0] == "inspect":
+            return Completed(stdout=image)
+        return Completed(stdout="1\n" if command[0] == "wait" else "")
+
+    monkeypatch.setattr(profile_module, "docker", fake_docker)
+    bundle = tmp_path / "submission"
+    bundle.mkdir()
+    (bundle / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+
+    result = profile_module.Sn60TeeProfile().run(
+        project_key=project,
+        credential=None,
+        bundle_root=str(bundle),
+        job_id="01" * 16,
+        bundle_sha256="cd" * 32,
+    )
+
+    assert result.report["success"] is False
+    assert message in result.report["error"]
+
+
+def test_docker_copy_failure_remains_infrastructure_error(monkeypatch, tmp_path: Path) -> None:
+    profile_module = _load_profile()
+    digest = "ab" * 32
+    project = "project-a"
+    monkeypatch.setenv(
+        "KATA_SN60_TEE_IMAGE_DIGESTS_JSON",
+        json.dumps({project: f"sha256:{digest}"}),
+    )
+    monkeypatch.setattr(profile_module, "ghcr_login", lambda: None)
+    monkeypatch.setattr(profile_module, "start_inference_gateway_once", lambda: None)
+    monkeypatch.setattr(profile_module, "ensure_inference_network_once", lambda: None)
+
+    class Completed:
+        def __init__(self, returncode=0, *, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_docker(args, **_kwargs):
+        command = list(args)
+        if command[0] == "cp" and ":/kata_output/report.json" in command[1]:
+            return Completed(1, stderr="Error response from daemon: storage driver unavailable")
+        return Completed(stdout="1\n" if command[0] == "wait" else "")
+
+    monkeypatch.setattr(profile_module, "docker", fake_docker)
+    bundle = tmp_path / "submission"
+    bundle.mkdir()
+    (bundle / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="storage driver unavailable"):
+        profile_module.Sn60TeeProfile().run(
+            project_key=project,
+            credential=None,
+            bundle_root=str(bundle),
+            job_id="01" * 16,
+            bundle_sha256="cd" * 32,
+        )

@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from kata.core.tree_snapshot import SnapshotError
 
+from kata_sn60.execution.errors import Sn60ExecutionInfrastructureError
 from kata_sn60.sn60_bitsec import (
     DEFAULT_SANDBOX_COMMIT,
     Sn60ReplicaContext,
@@ -454,7 +455,7 @@ def _run_default_execution_hook_with_report(tmp_path, monkeypatch, source, repor
     return sn60.build_default_execution_hook(source, use_tee=False)(context)
 
 
-def test_default_execution_hook_marks_docker_run_failure_as_infrastructure_error(
+def test_default_execution_hook_raises_on_docker_infrastructure_failure(
     tmp_path: Path, monkeypatch
 ) -> None:
     from kata_sn60 import sn60_bitsec as sn60
@@ -485,11 +486,45 @@ def test_default_execution_hook_marks_docker_run_failure_as_infrastructure_error
         ),
     )
 
-    payload = sn60.build_default_execution_hook(source, use_tee=False)(context)
+    with pytest.raises(Sn60ExecutionInfrastructureError, match="exit code 125"):
+        sn60.build_default_execution_hook(source, use_tee=False)(context)
 
-    assert payload["success"] is False
-    assert payload["infrastructure_error"] is True
-    assert "exit code 125" in payload["error"]
+
+def test_tee_execution_hook_raises_when_no_attested_result_exists(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kata_sn60 import sn60_bitsec as sn60
+    from kata_sn60.execution import tee_room
+
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = write_sandbox_source(sandbox_root)
+    source = resolve_sn60_sandbox_source(
+        sandbox_root=str(sandbox_root),
+        benchmark_file=str(benchmark_path),
+        sandbox_commit="commit-1",
+        scorer_version="ScaBenchScorerV2",
+    )
+    context = _make_context(tmp_path, source)
+    bundle = Path(context.bundle_root)
+    bundle.mkdir()
+    (bundle / "agent.py").write_text("def agent_main(): return {}\n", encoding="utf-8")
+    monkeypatch.setenv("KATA_SN60_ROOM_URL", "https://room.example")
+    monkeypatch.setenv("KATA_SN60_ROOM_MEASUREMENTS", "ab" * 32)
+    monkeypatch.setattr(
+        tee_room,
+        "evaluate_candidate_in_room",
+        lambda **_kwargs: tee_room.CandidateOutcome(
+            accepted=False,
+            report=None,
+            reason="room run failed: room HTTP 500: container rootfs is marked read-only",
+        ),
+    )
+
+    with pytest.raises(
+        Sn60ExecutionInfrastructureError,
+        match="container rootfs is marked read-only",
+    ):
+        sn60.build_tee_room_execution_hook(source)(context)
 
 
 def test_malformed_agent_report_is_recorded_failure_not_a_crash(
