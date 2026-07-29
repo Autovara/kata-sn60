@@ -33,5 +33,6 @@ def test_the_plugin_default_is_the_commit_the_registry_declares():
     assert expected, "the registry declares no upstream_commit for sn60__bitsec"
     assert DEFAULT_SANDBOX_COMMIT == expected, (
         f"the plugin defaults to {DEFAULT_SANDBOX_COMMIT}, but the registry declares {expected}. "
-        f"A lane running on the default would score a tree every published result names differently."
+        f"A lane running on the default would score a tree every published result names "
+        f"differently."
     )
