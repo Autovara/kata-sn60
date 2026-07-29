@@ -7,7 +7,10 @@
     "the registry's; naming one here is refused outright, not ignored.",
     "subnet_id and lane_id below are an ASSERTION, not an input: they are checked against the",
     "registry lane so pointing the generator at the wrong checkout fails loudly.",
-    "KATA_SUBNET_BUDGET_TEE_RUNS is the hard dimension capacity_estimate reserves. Worst case for one challenge is projects x replicas x 2 contestants x room attempts = 7 x 3 x 2 x 3 = 126, so 1260 is ten challenges a day. Recalculate it whenever the sample size, replica count or attempt ceiling changes -- the four move together. Inference and provider spend are miner-funded inside the room, so validator inference_calls/spend_usd caps would be fictional and are intentionally absent.",
+    "KATA_SUBNET_BUDGET_TEE_RUNS is the hard room-execution dimension. Worst case for one challenge is projects x replicas x 2 contestants x room attempts = 7 x 3 x 2 x 3 = 126, so 1260 is ten challenges a day. The agent's inference remains miner-funded inside the room; the separate Bitsec scoring judge is validator-funded and is bounded by the KATA_SN60_JUDGE_* per-challenge gateway plus the daily inference-call cap.",
+    "KATA_SUBNET_BUDGET_INFERENCE_CALLS is the judge's daily backstop and must be one challenge's worst case times the SAME ten challenges TEE_RUNS allows, because a reservation is checked as used + reserved + worst case: a day cap equal to KATA_SN60_JUDGE_MAX_CALLS would run one round per UTC day and defer the rest however little they actually spent, and a budget defer is a healthy no-op that reads as an idle lane rather than a misconfiguration. 5000 x 10 = 50000. This exceeds what a lane may normally self-declare; the installer's ceiling was raised deliberately for it (see kata-subnets-deploy MAX_BUDGET_BY_ENV).",
+    "KATA_SN60_JUDGE_MAX_CALLS is the per-challenge hard ceiling the gateway enforces. Measured worst case is 3600 = the benchmark's seven most expensive projects (600 judge calls at expected x ceil(eval_max_vulns / chunk_size)) x 3 replicas x 2 contestants, so 5000 leaves ~39% headroom. Recalculate it whenever the sample size, replica count or the benchmark's expected-finding counts change.",
+    "The scorer dependency environment lives outside the verified sandbox and is reused only when its uv.lock fingerprint matches. /srv/kata is already writable in the hardened unit; no write access to the verified source is required.",
     "",
     "submission_policy is THIS SUBNET's answer to a question the competition repository's PR gate has to ask: may a submission reach the network itself? Declared here because it is a property of this subnet's agent contract, not of the gate.",
     "",
@@ -18,6 +21,14 @@
   "lane_id": "sn60__bitsec",
   "challenge_config": {},
   "lane_env": {
+    "KATA_SN60_JUDGE_DEADLINE_SECONDS": "4800",
+    "KATA_SN60_JUDGE_MAX_CALLS": "5000",
+    "KATA_SN60_JUDGE_MAX_OUTPUT_TOKS": "4096",
+    "KATA_SN60_JUDGE_MAX_REQUEST_CHARS": "200000",
+    "KATA_SN60_JUDGE_MAX_TOKS": "50000000",
+    "KATA_SN60_JUDGE_REQUEST_TIMEOUT_SECONDS": "180",
+    "KATA_SN60_SCORER_RUNTIME_ROOT": "/srv/kata/sn60-scorer-runtime",
+    "KATA_SUBNET_BUDGET_INFERENCE_CALLS": "50000",
     "KATA_SUBNET_BUDGET_TEE_RUNS": "1260"
   },
   "unit_params": {

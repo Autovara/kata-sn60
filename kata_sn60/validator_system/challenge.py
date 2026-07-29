@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -21,10 +22,13 @@ from kata.state.lanes import (
     write_promotion_record,
 )
 
+from kata_sn60.execution.judge_gateway import JudgeGateway, judge_limits_from_env
 from kata_sn60.execution.policy import tee_execution_enabled
+from kata_sn60.execution.scorer_runtime import ScorerRuntime
 from kata_sn60.sn60_bitsec import (
     DEFAULT_EVAL_MAX_VULNS,
     DEFAULT_REPLICAS_PER_PROJECT,
+    DEFAULT_SANDBOX_PROXY_URL,
     Sn60DuelSummary,
     Sn60EvaluationHook,
     Sn60ExecutionHook,
@@ -326,6 +330,10 @@ class Sn60ChallengeResult:
     promotion_reason: str
     winner_challenge_summary_path: str | None = None
     competition_mode: str = "king_duel"
+    #: What the LLM judge actually cost this challenge (calls, tokens, spend, refusals), as
+    #: metered by ``kata_sn60.execution.judge_gateway``. ``None`` when the lane configured no
+    #: judge budget, so the round ran unmetered.
+    judge_usage: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -342,6 +350,9 @@ class Sn60BaselineResult:
     artifact_hash: str
     baseline: Sn60VariantSummary
     competition_mode: str = "baseline_only"
+    #: Actual validator-paid judge usage. Mirrors ``Sn60ChallengeResult`` so the resident can
+    #: settle a manually invoked baseline at measured cost instead of the worst-case reservation.
+    judge_usage: dict[str, object] | None = None
 
 
 def build_sn60_challenge_id() -> str:
@@ -504,20 +515,51 @@ def run_sn60_baseline_only(
     run_root = output_base / run_id
     run_root.mkdir(parents=True, exist_ok=False)
 
-    results = score_variant_on_projects(
-        run_id=run_id,
-        run_root=run_root,
-        variant_name="baseline",
-        artifact_root=baseline_root,
-        project_keys=project_keys,
-        replicas_per_project=replicas_per_project,
-        sandbox_source=source,
-        execution_hook=execution_hook
-        or build_default_execution_hook(source, use_tee=tee_execution_enabled()),
-        evaluation_hook=evaluation_hook or build_default_evaluation_hook(source),
-        eval_max_vulns=DEFAULT_EVAL_MAX_VULNS,
-        progress_callback=None,
-    )
+    with ExitStack() as stack:
+        judge_gateway = None
+        effective_evaluation_hook = evaluation_hook
+        if effective_evaluation_hook is None:
+            # Prepare before the first paid TEE execution. The runtime and its workspaces live
+            # under validator-owned challenge state, never under the reports directory mounted
+            # writable into the submitted agent.
+            scorer_runtime = stack.enter_context(
+                ScorerRuntime.for_challenge(
+                    source_root=Path(source.sandbox_root),
+                    challenge_root=run_root,
+                )
+            )
+            scorer_runtime.prepare()
+            judge_limits = judge_limits_from_env()
+            if judge_limits is not None:
+                judge_gateway = stack.enter_context(
+                    JudgeGateway(
+                        upstream_url=DEFAULT_SANDBOX_PROXY_URL,
+                        limits=judge_limits,
+                    )
+                )
+            effective_evaluation_hook = build_default_evaluation_hook(
+                source,
+                judge_gateway=judge_gateway,
+                scorer_runtime=scorer_runtime,
+            )
+
+        results = score_variant_on_projects(
+            run_id=run_id,
+            run_root=run_root,
+            variant_name="baseline",
+            artifact_root=baseline_root,
+            project_keys=project_keys,
+            replicas_per_project=replicas_per_project,
+            sandbox_source=source,
+            execution_hook=execution_hook
+            or build_default_execution_hook(source, use_tee=tee_execution_enabled()),
+            evaluation_hook=effective_evaluation_hook,
+            eval_max_vulns=DEFAULT_EVAL_MAX_VULNS,
+            progress_callback=None,
+        )
+        judge_usage = (
+            judge_gateway.final_usage().as_dict() if judge_gateway is not None else None
+        )
     baseline_summary = summarize_variant(
         variant_name="baseline",
         artifact_root=baseline_root,
@@ -536,6 +578,7 @@ def run_sn60_baseline_only(
         artifact_path=str(baseline_root),
         artifact_hash=baseline_hash,
         baseline=baseline_summary,
+        judge_usage=judge_usage,
     )
     write_sn60_baseline_summary(run_root / "baseline_summary.json", result)
     return result

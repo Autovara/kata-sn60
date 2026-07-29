@@ -319,3 +319,175 @@ def test_run_sn60_plugin_challenge_rejects_unknown_project_key(tmp_path: Path) -
             output_root=str(tmp_path / "generic"),
             plugin=Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate),
         )
+
+
+# --- judge budget lifecycle ---------------------------------------------------------------------
+
+
+def test_a_challenge_without_a_judge_budget_reports_no_judge_usage(tmp_path: Path) -> None:
+    """Unmetered stays the default, and ``judge_usage: None`` is the operator-visible signal for
+    it rather than a silent absence."""
+    from kata_sn60.cli import sn60_challenge_result_json
+
+    sandbox_root, benchmark_path, king_root, specs, paths = _build_inputs(tmp_path)
+    execute, evaluate = _detection_hooks()
+
+    result = run_sn60_plugin_challenge(
+        king_artifact_path=str(king_root),
+        candidates=[("cand-a", paths["cand-a"])],
+        config={
+            "sandbox_root": str(sandbox_root),
+            "benchmark_file": str(benchmark_path),
+            "sandbox_commit": "commit-unmetered",
+            "project_keys": ["project-alpha"],
+            "replicas_per_project": 1,
+        },
+        output_root=str(tmp_path / "unmetered"),
+        plugin=Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate),
+    )
+
+    assert result.judge_usage is None
+    assert sn60_challenge_result_json(result)["judge_usage"] is None
+
+
+def test_a_metered_challenge_publishes_what_the_judge_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kata_sn60.cli import sn60_challenge_result_json
+
+    sandbox_root, benchmark_path, king_root, specs, paths = _build_inputs(tmp_path)
+    execute, _ = _detection_hooks()
+
+    monkeypatch.setenv("KATA_SN60_JUDGE_MAX_CALLS", "50")
+    monkeypatch.setenv("KATA_SN60_JUDGE_MAX_OUTPUT_TOKS", "256")
+
+    seen_gateways = []
+
+    def evaluate(context, report_payload):
+        # Stand in for the scorer: charge the meter the way a real judge call would.
+        gateway = plugin._active_judge_gateway
+        seen_gateways.append(gateway)
+        hold = gateway.meter.reserve(request_chars=400)
+        gateway.meter.settle(hold, input_tokens=300, output_tokens=120, cached_tokens=40)
+        return {
+            "status": "success",
+            "result": {
+                "result": "PASS",
+                "detection_rate": 1.0,
+                "true_positives": 4,
+                "total_expected": 4,
+                "total_found": 4,
+                "precision": 1.0,
+                "f1_score": 1.0,
+            },
+        }
+
+    plugin = Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate)
+
+    result = run_sn60_plugin_challenge(
+        king_artifact_path=str(king_root),
+        candidates=[("cand-a", paths["cand-a"])],
+        config={
+            "sandbox_root": str(sandbox_root),
+            "benchmark_file": str(benchmark_path),
+            "sandbox_commit": "commit-metered",
+            "project_keys": ["project-alpha"],
+            "replicas_per_project": 1,
+        },
+        output_root=str(tmp_path / "metered"),
+        plugin=plugin,
+    )
+
+    # One gateway spans the WHOLE challenge -- king and candidate -- because the budget is
+    # per challenge, not per variant.
+    assert len(seen_gateways) == 2
+    assert seen_gateways[0] is seen_gateways[1]
+
+    usage = result.judge_usage
+    assert usage["calls"] == 2
+    assert usage["input_tokens"] == 600
+    assert usage["output_tokens"] == 240
+    assert usage["total_tokens"] == 840
+    assert usage["refusals"] == 0
+
+    # It reaches the published result, and survives the round trip through the file on disk.
+    assert sn60_challenge_result_json(result)["judge_usage"]["calls"] == 2
+    written = json.loads(
+        (Path(result.output_root) / "challenge_result.json").read_text(encoding="utf-8")
+    )
+    assert written["judge_usage"]["calls"] == 2
+
+    # The gateway is torn down with the challenge.
+    assert plugin._active_judge_gateway is None
+
+
+def test_a_judge_protocol_error_prevents_challenge_result_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kata_sn60.execution.judge_gateway import JudgeProtocolError
+
+    sandbox_root, benchmark_path, king_root, _specs, paths = _build_inputs(tmp_path)
+    execute, _ = _detection_hooks()
+    monkeypatch.setenv("KATA_SN60_JUDGE_MAX_CALLS", "50")
+
+    def evaluate(context, report_payload):
+        plugin._active_judge_gateway.meter.record_protocol_error(
+            "missing or malformed x-job-run-id"
+        )
+        return {
+            "status": "success",
+            "result": {
+                "result": "PASS",
+                "detection_rate": 1.0,
+                "true_positives": 1,
+                "total_expected": 1,
+                "total_found": 1,
+                "precision": 1.0,
+                "f1_score": 1.0,
+            },
+        }
+
+    plugin = Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate)
+    output_root = tmp_path / "protocol-failure"
+    with pytest.raises(JudgeProtocolError, match="attribution protocol failed"):
+        run_sn60_plugin_challenge(
+            king_artifact_path=str(king_root),
+            candidates=[("cand-a", paths["cand-a"])],
+            config={
+                "sandbox_root": str(sandbox_root),
+                "benchmark_file": str(benchmark_path),
+                "sandbox_commit": "commit-protocol-failure",
+                "project_keys": ["project-alpha"],
+                "replicas_per_project": 1,
+            },
+            output_root=str(output_root),
+            plugin=plugin,
+        )
+
+    assert not list(output_root.rglob("challenge_result.json"))
+
+
+def test_the_capacity_estimate_bounds_judge_spend_when_the_lane_configures_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``capacity.restrict_to_configured`` DEFERS when a configured day cap has no bound here, so
+    this is what makes KATA_SUBNET_BUDGET_INFERENCE_CALLS enforceable rather than a deferral."""
+    monkeypatch.setenv("KATA_SN60_JUDGE_MAX_CALLS", "400")
+    monkeypatch.setenv("KATA_SN60_JUDGE_MAX_OUTPUT_TOKS", "1000")
+    monkeypatch.setenv("KATA_SN60_JUDGE_MAX_REQUEST_CHARS", "2000")
+
+    bounds = Sn60BitsecPlugin().capacity_estimate(
+        config={"project_keys": ["p"], "replicas_per_project": 1}
+    )
+
+    assert bounds["inference_calls"] == 400.0
+    assert bounds["tokens"] == 400 * 2000 + 400 * 1000
+    assert bounds["tee_runs"] > 0
+
+
+def test_the_capacity_estimate_declares_no_judge_bound_when_unconfigured() -> None:
+    bounds = Sn60BitsecPlugin().capacity_estimate(
+        config={"project_keys": ["p"], "replicas_per_project": 1}
+    )
+
+    assert set(bounds) == {"tee_runs"}

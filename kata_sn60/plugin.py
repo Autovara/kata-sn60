@@ -22,6 +22,7 @@ from kata.plugins.contract import (
 )
 
 from kata_sn60.execution.policy import tee_execution_enabled
+from kata_sn60.execution.scorer_runtime import SCORER_RUNTIME_ROOT_ENV, ScorerRuntime
 from kata_sn60.king_cache import benchmark_version_key
 from kata_sn60.sn60_bitsec import (
     DEFAULT_REPLICAS_PER_PROJECT,
@@ -119,6 +120,26 @@ class Sn60BitsecPlugin(SubnetPlugin):
         self._execution_hook = execution_hook
         self._evaluation_hook = evaluation_hook
         self._scorer_version = scorer_version
+        # Set for the duration of a challenge's scoring phase by ``run_sn60_plugin_challenge``.
+        # The judge budget spans the whole challenge (king + every candidate), but the scorer is
+        # invoked per replica, so the gateway has to be reachable from ``run_candidate``.
+        self._active_judge_gateway = None
+        # The dependency environment is shared, while each scorer invocation receives its own
+        # workspace. The challenge owns this lifecycle so king and candidate cannot accidentally
+        # prepare separate mutable environments.
+        self._active_scorer_runtime = None
+
+    def set_active_judge_gateway(self, gateway) -> None:
+        """Attach (or clear) the metering gateway that validator-paid judge calls run through."""
+        self._active_judge_gateway = gateway
+
+    def set_active_scorer_runtime(self, runtime) -> None:
+        """Attach (or clear) the immutable-source scorer runtime for this challenge."""
+        self._active_scorer_runtime = runtime
+
+    @property
+    def uses_default_evaluation(self) -> bool:
+        return self._evaluation_hook is None
 
     def environment_spec(self) -> EnvSpec:
         # SN60 agents run sealed except for the evaluator's inference gateway.
@@ -153,6 +174,7 @@ class Sn60BitsecPlugin(SubnetPlugin):
         room-runnable benchmark (an upper bound on any sampled subset -- no random sampling /
         sample-secret needed for a bound). Every factor over-approximates real usage. Raises if the
         effective benchmark cannot be resolved (the platform then fails closed)."""
+        from kata_sn60.execution.judge_gateway import judge_limits_from_env
         from kata_sn60.execution.tee_room import resolve_room_max_attempts
         from kata_sn60.validator_system.project_selection import (
             parse_room_runnable_project_keys_from_env,
@@ -179,7 +201,17 @@ class Sn60BitsecPlugin(SubnetPlugin):
         replicas = self._replicas_per_project(config)
         attempts = resolve_room_max_attempts()
         tee_runs = max(1, n_projects) * max(1, replicas) * 2 * max(1, attempts)
-        return {"tee_runs": float(tee_runs)}
+        bounds = {"tee_runs": float(tee_runs)}
+        # Judge/proxy spend is the OTHER paid dimension of a challenge, and until the gateway
+        # existed nothing bounded it. Declaring its worst case here is what lets the platform
+        # reserve it against the lane's day cap: ``capacity.restrict_to_configured`` DEFERS when a
+        # configured day cap has no bound, so an operator who sets
+        # KATA_SUBNET_BUDGET_INFERENCE_CALLS without the lane's own per-challenge ceiling gets a
+        # deferred round rather than an unmetered one.
+        judge_limits = judge_limits_from_env()
+        if judge_limits is not None:
+            bounds.update(judge_limits.worst_case_usage())
+        return bounds
 
     def preflight(self) -> list[dict[str, str]]:
         """Would this deployment's SN60 project selection succeed?
@@ -194,6 +226,8 @@ class Sn60BitsecPlugin(SubnetPlugin):
         """
         issues: list[dict[str, str]] = []
         checks = [self._preflight_project_keys, self._preflight_replicas]
+        if self.uses_default_evaluation and os.environ.get(SCORER_RUNTIME_ROOT_ENV, "").strip():
+            checks.append(self._preflight_scorer_runtime)
         if self.environment_spec().execution == "tee":
             checks.append(self._preflight_room)
         for check in checks:
@@ -230,6 +264,22 @@ class Sn60BitsecPlugin(SubnetPlugin):
 
     def _preflight_replicas(self) -> None:
         parse_sn60_replicas_per_project_from_env()
+
+    def _preflight_scorer_runtime(self) -> None:
+        """Prepare dependencies before a challenger can spend a TEE execution."""
+
+        source = resolve_sn60_sandbox_source(
+            sandbox_root=None,
+            benchmark_file=None,
+            sandbox_commit=None,
+            scorer_version=self._scorer_version,
+        )
+        runtime_root = Path(os.environ[SCORER_RUNTIME_ROOT_ENV]).expanduser().resolve()
+        ScorerRuntime(
+            source_root=Path(source.sandbox_root),
+            runtime_root=runtime_root,
+            workspace_root=runtime_root / ".preflight-workspaces",
+        ).prepare()
 
     def _replicas_per_project(self, config: dict[str, Any]) -> int:
         """Replicas per project: the challenge config if it says, else the deployment env.
@@ -286,7 +336,11 @@ class Sn60BitsecPlugin(SubnetPlugin):
     ) -> Sn60RawRun:
         source = problems.sandbox_source
         execution_hook = self.resolve_execution_hook(source)
-        evaluation_hook = self._evaluation_hook or build_default_evaluation_hook(source)
+        evaluation_hook = self._evaluation_hook or build_default_evaluation_hook(
+            source,
+            judge_gateway=self._active_judge_gateway,
+            scorer_runtime=self._active_scorer_runtime,
+        )
         artifact_root = Path(agent_path).expanduser().resolve()
         label = context.label
         # The generic label identifies the run dir; the evaluator's variant name stays

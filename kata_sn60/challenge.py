@@ -9,13 +9,17 @@ drop-in for the legacy ``run_sn60_challenge``.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from kata.core.challenge import ChallengeOutcome, ScoredVariant, run_plugin_challenge
 
+from kata_sn60.execution.judge_gateway import JudgeGateway, judge_limits_from_env
+from kata_sn60.execution.scorer_runtime import ScorerRuntime
 from kata_sn60.sn60_bitsec import (
+    DEFAULT_SANDBOX_PROXY_URL,
     Sn60DuelSummary,
     hash_bundle_root,
     validate_sn60_project_keys,
@@ -90,6 +94,7 @@ def build_sn60_challenge_result(
     screener_run_ids: dict[str, str] | None = None,
     screened_labels: frozenset[str] = frozenset(),
     always_write_candidate_summary: bool = False,
+    judge_usage: dict[str, object] | None = None,
 ) -> Sn60ChallengeResult:
     """Reconstruct the SN60 challenge result from a generic outcome and write it.
 
@@ -182,6 +187,7 @@ def build_sn60_challenge_result(
         promotion_reason=promotion_reason,
         winner_challenge_summary_path=winner_challenge_summary_path,
         competition_mode="king_duel",
+        judge_usage=judge_usage,
     )
     write_sn60_challenge_result(Path(output_root) / "challenge_result.json", result)
     return result
@@ -215,6 +221,16 @@ def run_sn60_plugin_challenge(
         problems.project_keys,
         sandbox_source=problems.sandbox_source,
     )
+    scorer_runtime = None
+    if plugin.uses_default_evaluation:
+        scorer_runtime = ScorerRuntime.for_challenge(
+            source_root=Path(problems.sandbox_source.sandbox_root),
+            challenge_root=challenge_root,
+        )
+        # Prepare before any optional TEE screening spends a miner request. Scoring later invokes
+        # this interpreter directly, so concurrent replicas never run uv or race over a shared
+        # environment.
+        scorer_runtime.prepare()
     writer = (
         Sn60ChallengeProgress(
             run_id=run_id,
@@ -284,17 +300,40 @@ def run_sn60_plugin_challenge(
     score_king_effective = bool(qualified)
     scoring_problems = replace(problems, screened_execution_payloads=screened_execution_payloads)
 
-    outcome = run_plugin_challenge(
-        plugin,
-        king_agent_path=king_artifact_path,
-        candidates=qualified,
-        config=config,
-        output_root=str(challenge_root),
-        seed=run_id,
-        score_king=score_king_effective,
-        progress=writer.on_update if writer is not None else None,
-        problems=scoring_problems,
-    )
+    # The judge budget is per CHALLENGE, so one gateway spans the whole scoring phase -- king and
+    # every candidate -- rather than one per project. Its caps then bound what this duel can spend
+    # on the LLM judge no matter how many projects, replicas or findings it turns out to involve.
+    judge_limits = judge_limits_from_env()
+    with ExitStack() as stack:
+        judge_gateway = None
+        if scorer_runtime is not None:
+            stack.enter_context(scorer_runtime)
+        if judge_limits is not None:
+            judge_gateway = stack.enter_context(
+                JudgeGateway(upstream_url=DEFAULT_SANDBOX_PROXY_URL, limits=judge_limits)
+            )
+        plugin.set_active_scorer_runtime(scorer_runtime)
+        plugin.set_active_judge_gateway(judge_gateway)
+        try:
+            outcome = run_plugin_challenge(
+                plugin,
+                king_agent_path=king_artifact_path,
+                candidates=qualified,
+                config=config,
+                output_root=str(challenge_root),
+                seed=run_id,
+                score_king=score_king_effective,
+                progress=writer.on_update if writer is not None else None,
+                problems=scoring_problems,
+            )
+        finally:
+            plugin.set_active_judge_gateway(None)
+            plugin.set_active_scorer_runtime(None)
+        # Read the meter INSIDE the gateway's lifetime: it is the settled truth for what this
+        # challenge spent, and the caller settles the day budget from it.
+        judge_usage = (
+            judge_gateway.final_usage().as_dict() if judge_gateway is not None else None
+        )
 
     if writer is not None:
         writer.finalize(outcome, plugin)
@@ -309,4 +348,5 @@ def run_sn60_plugin_challenge(
         screener_run_ids=screener_run_ids,
         screened_labels=frozenset(screened_labels),
         always_write_candidate_summary=always_write_candidate_summary,
+        judge_usage=judge_usage,
     )

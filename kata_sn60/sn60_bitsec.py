@@ -11,7 +11,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import fmean
-from typing import Callable, Mapping, NamedTuple, TypedDict
+from typing import TYPE_CHECKING, Callable, Mapping, NamedTuple, TypedDict
 from urllib.parse import urlparse
 
 from kata.provenance import sha256_directory
@@ -29,6 +29,10 @@ from kata_sn60.king_cache import (
     load_king_scoreboard,
     save_king_scoreboard,
 )
+
+if TYPE_CHECKING:  # avoids importing the gateway (and its server machinery) at module load
+    from kata_sn60.execution.judge_gateway import JudgeGateway
+    from kata_sn60.execution.scorer_runtime import ScorerRuntime
 
 DEFAULT_SANDBOX_PROXY_NETWORK = "bitsec-net"
 DEFAULT_SANDBOX_PROXY_URL = "http://localhost:8087"
@@ -1183,7 +1187,29 @@ def report_finding_count(report_payload: dict[str, object]) -> int:
     return 0
 
 
-def build_default_evaluation_hook(source: Sn60SandboxSource) -> Sn60EvaluationHook:
+def build_default_evaluation_hook(
+    source: Sn60SandboxSource,
+    *,
+    judge_gateway: "JudgeGateway | None" = None,
+    scorer_runtime: "ScorerRuntime | None" = None,
+) -> Sn60EvaluationHook:
+    """The isolated scoring hook.
+
+    The verified source is imported read-only through ``PYTHONPATH``. Dependencies come from an
+    external, lock-keyed environment and every evaluation gets a disposable writable workspace, so
+    neither ``uv`` nor Python can mutate the evidence tree.
+
+    ``scorer_runtime`` is required for every non-empty report. It must be created by the validator
+    at the trusted challenge root; constructing one from the miner-writable reports directory would
+    let an agent redirect the scorer workspace before evaluation.
+
+    With a ``judge_gateway``, the scorer is pointed at Kata's metering gateway instead of the proxy
+    directly, so validator-paid judge traffic runs under a hard per-challenge ceiling.
+
+    Without one the behaviour is unchanged -- unmetered, straight at ``DEFAULT_SANDBOX_PROXY_URL``
+    -- which is what the tests and the local dev path use.
+    """
+
     def _evaluate(
         context: Sn60ReplicaContext,
         report_payload: dict[str, object],
@@ -1218,34 +1244,141 @@ def build_default_evaluation_hook(source: Sn60SandboxSource) -> Sn60EvaluationHo
                     "result": "no findings reported; LLM scoring skipped",
                 },
             }
-        try:
-            completed = subprocess.run(
-                build_bitsec_evaluation_command(context),
-                cwd=source.sandbox_root,
-                capture_output=True,
-                text=True,
-                env={
-                    **default_subprocess_env(),
-                    # Point the SN60 scorer at the exact benchmark file Kata
-                    # resolved and recorded in provenance. The scorer hardcodes the
-                    # filename and reads settings.validator_dir, so without this the
-                    # recorded benchmark_sha256 could describe a different file than
-                    # the one actually scored.
-                    "VALIDATOR_DIR": str(Path(source.benchmark_file).expanduser().resolve().parent),
-                    "CHUTES_API_KEY": required_env("CHUTES_API_KEY"),
-                    "PROXY_URL": DEFAULT_SANDBOX_PROXY_URL,
-                },
-                timeout=_env_positive_float(
-                    "KATA_SN60_EVALUATION_TIMEOUT_SECONDS",
-                    DEFAULT_EVALUATION_SUBPROCESS_TIMEOUT_SECONDS,
+        timeout = _env_positive_float(
+            "KATA_SN60_EVALUATION_TIMEOUT_SECONDS",
+            DEFAULT_EVALUATION_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+        if scorer_runtime is None:
+            return {
+                "status": "error",
+                "error": (
+                    "SN60 scorer runtime failed closed: no validator-owned scorer runtime "
+                    "was provided."
                 ),
+                "result": {},
+            }
+        judge_scope = str(sn60_synthetic_ids(context).job_run_id)
+        refusals_before = 0
+        upstream_errors_before = 0
+        protocol_errors_before = 0
+        if judge_gateway is not None:
+            scoped_usage = judge_gateway.usage(scope=judge_scope)
+            refusals_before = scoped_usage.refusals
+            upstream_errors_before = scoped_usage.upstream_errors
+            protocol_errors_before = judge_gateway.usage().protocol_errors
+            # This timeout bounds ONE project subprocess; with several projects scored
+            # concurrently the challenge-wide total was bounded by nothing. Never let a project
+            # outlive the challenge's judge deadline.
+            remaining = judge_gateway.meter.deadline_remaining()
+            if remaining is not None:
+                if remaining <= 0:
+                    return {
+                        "status": "error",
+                        "error": (
+                            "SN60 judge budget deadline elapsed before this project was scored."
+                        ),
+                        "result": {},
+                    }
+                timeout = min(timeout, remaining)
+        from kata_sn60.execution.judge_gateway import JudgeProtocolError
+        from kata_sn60.execution.scorer_runtime import ScorerRuntimeError
+
+        scope_registered = False
+        try:
+            if judge_gateway is not None:
+                judge_gateway.register_scope(judge_scope)
+                scope_registered = True
+            workspace_label = (
+                f"{context.variant_name}-{context.project_key}-r{context.replica_index}"
             )
+            with scorer_runtime.workspace(workspace_label) as workspace:
+                interpreter = scorer_runtime.prepare()
+                completed = subprocess.run(
+                    build_bitsec_evaluation_command(
+                        context,
+                        python_executable=str(interpreter),
+                    ),
+                    cwd=str(workspace),
+                    capture_output=True,
+                    text=True,
+                    env=scorer_runtime.environment(
+                        workspace=workspace,
+                        interpreter=interpreter,
+                        base=default_subprocess_env(),
+                        overrides={
+                            # Point the scorer at the exact benchmark file Kata resolved and
+                            # recorded in provenance. The upstream scorer hardcodes the filename.
+                            "VALIDATOR_DIR": str(
+                                Path(source.benchmark_file).expanduser().resolve().parent
+                            ),
+                            "CHUTES_API_KEY": required_env("CHUTES_API_KEY"),
+                            "PROXY_URL": (
+                                judge_gateway.url
+                                if judge_gateway is not None
+                                else DEFAULT_SANDBOX_PROXY_URL
+                            ),
+                        },
+                    ),
+                    timeout=timeout,
+                )
         except subprocess.TimeoutExpired as exc:
             return {
                 "status": "error",
                 "error": f"Bitsec evaluation command timed out after {exc.timeout} seconds.",
                 "result": {},
             }
+        except JudgeProtocolError as exc:
+            return {
+                "status": "error",
+                "error": f"SN60 judge attribution failed closed: {exc}",
+                "result": {},
+            }
+        except (ScorerRuntimeError, OSError) as exc:
+            return {
+                "status": "error",
+                "error": f"SN60 scorer runtime failed closed: {exc}",
+                "result": {},
+            }
+        finally:
+            if scope_registered and judge_gateway is not None:
+                judge_gateway.unregister_scope(judge_scope)
+        # A refused judge call does NOT stop the scorer: ``find_match_in_results`` catches every
+        # per-chunk exception and moves to the next chunk, so it would return a quietly degraded
+        # score -- expected findings marked "missed" because the call to check them was never
+        # made. That is indistinguishable from a genuinely bad agent, so it must never be
+        # published. Fail the project closed instead.
+        if judge_gateway is not None:
+            usage = judge_gateway.usage(scope=judge_scope)
+            refused = usage.refusals - refusals_before
+            upstream_errors = usage.upstream_errors - upstream_errors_before
+            protocol_errors = judge_gateway.usage().protocol_errors - protocol_errors_before
+            if protocol_errors > 0:
+                return {
+                    "status": "error",
+                    "error": (
+                        f"SN60 judge received {protocol_errors} unattributed or malformed "
+                        "scoring request(s); the score would be incomplete."
+                    ),
+                    "result": {},
+                }
+            if refused > 0:
+                return {
+                    "status": "error",
+                    "error": (
+                        f"SN60 judge budget refused {refused} scoring call(s) "
+                        f"({usage.first_refusal_reason}); the score would be incomplete."
+                    ),
+                    "result": {},
+                }
+            if upstream_errors > 0:
+                return {
+                    "status": "error",
+                    "error": (
+                        f"SN60 judge had {upstream_errors} upstream failure(s) while scoring this "
+                        "replica; the score would be incomplete."
+                    ),
+                    "result": {},
+                }
         if completed.returncode == 0:
             payload = extract_sn60_evaluation_payload(completed.stdout)
             if payload is None:
@@ -1347,7 +1480,7 @@ def bitsec_project_image(project_key: str) -> str:
     return f"ghcr.io/bitsec-ai/{project_key}:latest"
 
 
-def build_bitsec_evaluation_command(context: Sn60ReplicaContext) -> list[str]:
+def build_bitsec_evaluation_script(context: Sn60ReplicaContext) -> str:
     # repr() quotes the interpolated strings so a project key or path
     # containing quote characters cannot break or alter the script. The ids
     # and eval_max_vulns are validated ints, safe to interpolate directly.
@@ -1368,7 +1501,20 @@ def build_bitsec_evaluation_command(context: Sn60ReplicaContext) -> list[str]:
         "eval_max_vulns=" + str(int(context.eval_max_vulns)) + "); "
         "print(json.dumps(executor.eval_job_run(), default=str))"
     )
-    return ["uv", "run", "python", "-c", script]
+    return script
+
+
+def build_bitsec_evaluation_command(
+    context: Sn60ReplicaContext,
+    *,
+    python_executable: str,
+) -> list[str]:
+    """Build a no-sync scorer command using an already prepared external interpreter."""
+
+    executable = str(python_executable).strip()
+    if not executable:
+        raise ValueError("SN60 scorer Python executable must be non-empty.")
+    return [executable, "-c", build_bitsec_evaluation_script(context)]
 
 
 # Validator-owned scoring secrets that the miner execution path must never

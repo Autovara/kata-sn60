@@ -60,6 +60,9 @@ def sn60_challenge_result_json(result) -> dict:
         "replicas_per_project": result.replicas_per_project,
         "runs_per_project": runs_per_project,
         "project_pass_threshold": project_pass_threshold_label(runs_per_project),
+        # What the LLM judge actually cost this challenge. None when the lane configured no judge
+        # budget, which is itself the operator-visible signal that the round ran unmetered.
+        "judge_usage": getattr(result, "judge_usage", None),
         "king": sn60_variant_detail(result.king) if result.king else None,
         "entries": [
             {
@@ -273,6 +276,7 @@ def handle_sn60_baseline(args) -> int:
         print_json(
             {
                 "run_id": result.run_id,
+                "output_root": result.output_root,
                 "baseline_summary_path": str(
                     (Path(result.output_root) / "baseline_summary.json").resolve()
                 ),
@@ -282,6 +286,7 @@ def handle_sn60_baseline(args) -> int:
                 "project_pass_threshold": project_pass_threshold_label(runs_per_project),
                 "project_keys": result.project_keys,
                 "replicas_per_project": result.replicas_per_project,
+                "judge_usage": result.judge_usage,
                 "sandbox_source": {
                     "sandbox_root": result.sandbox_source.sandbox_root,
                     "benchmark_file": result.sandbox_source.benchmark_file,

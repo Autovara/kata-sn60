@@ -94,6 +94,69 @@ def write_sandbox_source(root: Path) -> Path:
     return benchmark_path
 
 
+def test_default_baseline_uses_trusted_runtime_and_metered_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kata_sn60.validator_system import challenge as challenge_module
+
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = write_sandbox_source(sandbox_root)
+    baseline_root = tmp_path / "baseline"
+    write_bundle(baseline_root, "baseline")
+    monkeypatch.setenv("KATA_SN60_ALLOW_UNVERIFIED_SANDBOX", "1")
+    monkeypatch.setenv("KATA_SN60_JUDGE_MAX_CALLS", "10")
+    lifecycle: list[str] = []
+    captured: dict = {}
+
+    class _Runtime:
+        @classmethod
+        def for_challenge(cls, *, source_root, challenge_root):
+            captured["source_root"] = source_root
+            captured["challenge_root"] = challenge_root
+            return cls()
+
+        def __enter__(self):
+            lifecycle.append("enter")
+            return self
+
+        def __exit__(self, *exc):
+            lifecycle.append("exit")
+
+        def prepare(self):
+            lifecycle.append("prepare")
+            return Path("/trusted/runtime/bin/python")
+
+    def fake_score(**kwargs):
+        captured["evaluation_hook"] = kwargs["evaluation_hook"]
+        lifecycle.append("score")
+        return []
+
+    monkeypatch.setattr(challenge_module, "ScorerRuntime", _Runtime)
+    monkeypatch.setattr(challenge_module, "score_variant_on_projects", fake_score)
+
+    result = challenge_module.run_sn60_baseline_only(
+        submission_id="baseline",
+        artifact_path=str(baseline_root),
+        project_keys=["project-alpha"],
+        output_root=str(tmp_path / "runs"),
+        sandbox_root=str(sandbox_root),
+        benchmark_file=str(benchmark_path),
+        sandbox_commit="commit-baseline",
+        execution_hook=lambda _context: {},
+    )
+
+    assert lifecycle[:3] == ["enter", "prepare", "score"]
+    assert lifecycle[-1] == "exit"
+    assert captured["challenge_root"] == Path(result.output_root)
+    assert callable(captured["evaluation_hook"])
+    assert result.judge_usage is not None
+    assert result.judge_usage["calls"] == 0
+    written = json.loads(
+        (Path(result.output_root) / "baseline_summary.json").read_text(encoding="utf-8")
+    )
+    assert written["judge_usage"]["calls"] == 0
+
+
 def test_evaluate_sn60_promotion_uses_invalid_runs_as_last_tiebreaker() -> None:
     king = build_variant(
         "king", aggregated_score=0.5, codebase_pass_count=1, true_positives=2, invalid_runs=0

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+import urllib.error
+import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -30,6 +34,48 @@ from kata_sn60.sn60_bitsec import (
     validate_sn60_project_keys,
 )
 from kata_sn60.validator_system.challenge import sn60_variant_rank
+
+
+class _FakeScorerRuntime:
+    """Unit-test seam: runtime mechanics have their own tests; scorer-hook tests inspect wiring."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root / "fake-scorer-workspaces"
+
+    @contextmanager
+    def workspace(self, label: str):
+        path = self.root / label
+        path.mkdir(parents=True)
+        for name in ("home", "tmp", "cache"):
+            (path / name).mkdir()
+        try:
+            yield path
+        finally:
+            shutil.rmtree(path)
+
+    @staticmethod
+    def prepare() -> Path:
+        return Path("/prepared/scorer/python")
+
+    @staticmethod
+    def environment(
+        *, workspace: Path, interpreter: Path, base: dict, overrides: dict
+    ) -> dict:
+        return {
+            **base,
+            **overrides,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "HOME": str(workspace / "home"),
+            "TMPDIR": str(workspace / "tmp"),
+        }
+
+
+def _evaluation_hook(source, tmp_path: Path, *, judge_gateway=None):
+    return build_default_evaluation_hook(
+        source,
+        judge_gateway=judge_gateway,
+        scorer_runtime=_FakeScorerRuntime(tmp_path),
+    )
 
 
 def write_sandbox_source(root: Path) -> Path:
@@ -133,7 +179,10 @@ def _make_context(tmp_path: Path, source, **overrides) -> Sn60ReplicaContext:
 def test_build_bitsec_evaluation_command_uses_synthetic_ids_and_eval_max_vulns(
     tmp_path: Path,
 ) -> None:
-    from kata_sn60.sn60_bitsec import build_bitsec_evaluation_command
+    from kata_sn60.sn60_bitsec import (
+        build_bitsec_evaluation_command,
+        build_bitsec_evaluation_script,
+    )
 
     sandbox_root = tmp_path / "sandbox"
     benchmark_path = write_sandbox_source(sandbox_root)
@@ -146,7 +195,7 @@ def test_build_bitsec_evaluation_command_uses_synthetic_ids_and_eval_max_vulns(
     context = _make_context(tmp_path, source, eval_max_vulns=25)
     ids = sn60_synthetic_ids(context)
 
-    script = build_bitsec_evaluation_command(context)[-1]
+    script = build_bitsec_evaluation_script(context)
 
     assert f"id={ids.job_run_id}" in script
     assert f"agent_id={ids.agent_id}" in script
@@ -155,6 +204,10 @@ def test_build_bitsec_evaluation_command_uses_synthetic_ids_and_eval_max_vulns(
     assert "eval_max_vulns=25" in script
     # The old fixed-identity form must be gone.
     assert "MockJobRun(id=1," not in script
+    assert build_bitsec_evaluation_command(
+        context,
+        python_executable="/runtime/env/bin/python",
+    ) == ["/runtime/env/bin/python", "-c", script]
     import ast
 
     ast.parse(script)
@@ -224,8 +277,6 @@ def test_resolve_sn60_sandbox_source_uses_the_production_default_commit(
 def test_default_evaluation_hook_points_validator_dir_at_recorded_benchmark(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kata_sn60.sn60_bitsec import build_default_evaluation_hook
-
     sandbox_root = tmp_path / "sandbox"
     benchmark_path = write_sandbox_source(sandbox_root)
     source = resolve_sn60_sandbox_source(
@@ -240,14 +291,15 @@ def test_default_evaluation_hook_points_validator_dir_at_recorded_benchmark(
     captured = {}
 
     def fake_run(cmd, *args, **kwargs):
-        captured["env"] = kwargs.get("env", {})
+        captured["command"] = cmd
+        captured.update(kwargs)
         return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
 
     monkeypatch.setenv("CHUTES_API_KEY", "scoring-key")
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     # A report WITH a finding exercises the scorer subprocess (empty reports skip it).
-    build_default_evaluation_hook(source)(
+    _evaluation_hook(source, tmp_path)(
         context, {"success": True, "report": {"vulnerabilities": [{"title": "x"}]}}
     )
 
@@ -257,13 +309,17 @@ def test_default_evaluation_hook_points_validator_dir_at_recorded_benchmark(
     assert (
         Path(captured["env"]["VALIDATOR_DIR"]) / "curated-highs-only-2025-08-08.json"
     ) == benchmark_path
+    assert captured["command"][0] == "/prepared/scorer/python"
+    assert "uv" not in captured["command"]
+    assert Path(captured["cwd"]) != sandbox_root
+    assert captured["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert not (sandbox_root / ".venv").exists()
+    assert not list(sandbox_root.rglob("__pycache__"))
 
 
 def test_default_evaluation_hook_skips_scorer_on_empty_findings(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kata_sn60.sn60_bitsec import build_default_evaluation_hook
-
     sandbox_root = tmp_path / "sandbox"
     benchmark_path = write_sandbox_source(sandbox_root)
     source = resolve_sn60_sandbox_source(
@@ -283,7 +339,7 @@ def test_default_evaluation_hook_skips_scorer_on_empty_findings(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    payload = build_default_evaluation_hook(source)(
+    payload = _evaluation_hook(source, tmp_path)(
         context, {"success": True, "report": {"vulnerabilities": []}}
     )
 
@@ -334,7 +390,7 @@ def test_default_evaluation_hook_ignores_agent_writable_evaluation_json(
         ),
     )
 
-    payload = build_default_evaluation_hook(source)(
+    payload = _evaluation_hook(source, tmp_path)(
         context, {"success": True, "report": {"vulnerabilities": [{"title": "x"}]}}
     )
 
@@ -363,7 +419,7 @@ def test_default_evaluation_hook_rejects_infrastructure_execution_failure(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    payload = build_default_evaluation_hook(source)(
+    payload = _evaluation_hook(source, tmp_path)(
         context,
         {
             "success": False,
@@ -640,7 +696,7 @@ def test_execution_subprocess_env_strips_validator_scoring_secrets(
 def test_build_bitsec_evaluation_command_quotes_interpolated_values(
     tmp_path: Path,
 ) -> None:
-    from kata_sn60.sn60_bitsec import build_bitsec_evaluation_command
+    from kata_sn60.sn60_bitsec import build_bitsec_evaluation_script
 
     context = Sn60ReplicaContext(
         run_id="run-1",
@@ -654,9 +710,7 @@ def test_build_bitsec_evaluation_command_quotes_interpolated_values(
         sandbox_source=None,
     )
 
-    command = build_bitsec_evaluation_command(context)
-
-    script = command[-1]
+    script = build_bitsec_evaluation_script(context)
     # The hostile project key must survive as a single quoted literal instead
     # of terminating the string and injecting statements.
     assert repr(context.project_key) in script
@@ -1113,3 +1167,290 @@ def test_validate_sn60_project_keys_rejects_keys_missing_from_benchmark(
     )
     with pytest.raises(ValueError, match="not present in the resolved benchmark"):
         validate_sn60_project_keys(["project-missing"], sandbox_source=source)
+
+
+# --- judge budget gateway wiring ---------------------------------------------------------------
+#
+# The gateway itself is tested in test_judge_gateway.py; these cover the seam -- that the scorer is
+# actually pointed at it, that a refused call fails the project CLOSED rather than publishing a
+# quietly degraded score, and that the challenge-wide deadline bounds the project subprocess.
+
+
+def _gateway_source(tmp_path: Path):
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = write_sandbox_source(sandbox_root)
+    return resolve_sn60_sandbox_source(
+        sandbox_root=str(sandbox_root),
+        benchmark_file=str(benchmark_path),
+        sandbox_commit="commit-1",
+        scorer_version="ScaBenchScorerV2",
+    )
+
+
+_NONEMPTY_REPORT = {"success": True, "report": {"vulnerabilities": [{"title": "x"}]}}
+
+
+def test_the_scorer_is_pointed_at_the_judge_gateway_when_one_is_active(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kata_sn60.execution.judge_gateway import JudgeBudgetLimits, JudgeGateway
+
+    source = _gateway_source(tmp_path)
+    context = _make_context(tmp_path, source)
+    Path(context.report_path).parent.mkdir(parents=True, exist_ok=True)
+
+    captured = {}
+
+    def fake_run(cmd, *args, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout='{"status": "success"}', stderr="")
+
+    monkeypatch.setenv("CHUTES_API_KEY", "scoring-key")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with JudgeGateway(
+        upstream_url="http://upstream:8087", limits=JudgeBudgetLimits(max_calls=10)
+    ) as gateway:
+        payload = _evaluation_hook(source, tmp_path, judge_gateway=gateway)(
+            context, _NONEMPTY_REPORT
+        )
+        assert captured["env"]["PROXY_URL"] == gateway.url
+
+    assert payload["status"] == "success"
+
+
+def test_without_a_gateway_the_scorer_still_talks_to_the_proxy_directly(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kata_sn60.sn60_bitsec import DEFAULT_SANDBOX_PROXY_URL
+
+    source = _gateway_source(tmp_path)
+    context = _make_context(tmp_path, source)
+    Path(context.report_path).parent.mkdir(parents=True, exist_ok=True)
+
+    captured = {}
+
+    def fake_run(cmd, *args, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout='{"status": "success"}', stderr="")
+
+    monkeypatch.setenv("CHUTES_API_KEY", "scoring-key")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    _evaluation_hook(source, tmp_path)(context, _NONEMPTY_REPORT)
+
+    assert captured["env"]["PROXY_URL"] == DEFAULT_SANDBOX_PROXY_URL
+
+
+def test_a_nonempty_report_requires_a_validator_owned_runtime(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = _gateway_source(tmp_path)
+    context = _make_context(tmp_path, source)
+
+    def fake_run(*args, **kwargs):  # pragma: no cover - must never be reached
+        raise AssertionError("the scorer must not start without a trusted runtime")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    payload = build_default_evaluation_hook(source)(context, _NONEMPTY_REPORT)
+
+    assert payload["status"] == "error"
+    assert "no validator-owned scorer runtime" in payload["error"]
+
+
+def test_a_refused_judge_call_fails_the_project_instead_of_scoring_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The scorer swallows a 429 per chunk and carries on, so a budget refusal would otherwise
+    surface as expected findings silently marked 'missed' -- a bad-agent verdict caused by our own
+    ceiling. It has to be an error."""
+    from kata_sn60.execution.judge_gateway import JudgeBudgetLimits, JudgeGateway
+
+    source = _gateway_source(tmp_path)
+    context = _make_context(tmp_path, source)
+    Path(context.report_path).parent.mkdir(parents=True, exist_ok=True)
+
+    def fake_run(cmd, *args, **kwargs):
+        # Stand in for the scorer walking into the closed door mid-evaluation, then returning a
+        # perfectly well-formed (but incomplete) success payload.
+        scope = str(sn60_synthetic_ids(context).job_run_id)
+        gateway.meter.record_refusal("max_calls 11 > 10", scope=scope)
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout='{"status": "success", "result": {"detection_rate": 0.0}}', stderr=""
+        )
+
+    monkeypatch.setenv("CHUTES_API_KEY", "scoring-key")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with JudgeGateway(
+        upstream_url="http://upstream:8087", limits=JudgeBudgetLimits(max_calls=10)
+    ) as gateway:
+        payload = _evaluation_hook(source, tmp_path, judge_gateway=gateway)(
+            context, _NONEMPTY_REPORT
+        )
+
+    assert payload["status"] == "error"
+    assert "refused 1 scoring call" in payload["error"]
+    assert "max_calls 11 > 10" in payload["error"]
+    assert payload["result"] == {}
+
+
+@pytest.mark.parametrize("scope_header", [None, "unknown", "2147483647"])
+def test_unattributed_judge_call_cannot_publish_a_degraded_score(
+    tmp_path: Path, monkeypatch, scope_header: str | None
+) -> None:
+    """The expected bucket is validator-registered; a scorer-chosen missing/wrong bucket is
+    rejected and the hook observes the global protocol failure."""
+    from kata_sn60.execution.judge_gateway import JudgeBudgetLimits, JudgeGateway
+
+    source = _gateway_source(tmp_path)
+    context = _make_context(tmp_path, source)
+    Path(context.report_path).parent.mkdir(parents=True, exist_ok=True)
+
+    def fake_run(cmd, *args, **kwargs):
+        headers = {"Content-Type": "application/json"}
+        if scope_header is not None:
+            headers["x-job-run-id"] = scope_header
+        request = urllib.request.Request(
+            f"{gateway.url}/inference",
+            data=b'{"messages":[]}',
+            headers=headers,
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(request, timeout=5)
+        assert exc.value.code == 403
+        return subprocess.CompletedProcess(cmd, 0, stdout='{"status": "success"}', stderr="")
+
+    monkeypatch.setenv("CHUTES_API_KEY", "scoring-key")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with JudgeGateway(
+        upstream_url="http://upstream:8087", limits=JudgeBudgetLimits(max_calls=10)
+    ) as gateway:
+        payload = _evaluation_hook(source, tmp_path, judge_gateway=gateway)(
+            context, _NONEMPTY_REPORT
+        )
+
+    assert payload["status"] == "error"
+    assert "unattributed or malformed" in payload["error"]
+    assert gateway.usage().protocol_errors == 1
+
+
+def test_only_refusals_from_this_project_fail_this_project(tmp_path: Path, monkeypatch) -> None:
+    """Refusals accumulate across the whole challenge, so the check has to be a delta -- otherwise
+    one refused project would poison every project scored after it."""
+    from kata_sn60.execution.judge_gateway import JudgeBudgetLimits, JudgeGateway
+
+    source = _gateway_source(tmp_path)
+    context = _make_context(tmp_path, source)
+    Path(context.report_path).parent.mkdir(parents=True, exist_ok=True)
+
+    def fake_run(cmd, *args, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout='{"status": "success"}', stderr="")
+
+    monkeypatch.setenv("CHUTES_API_KEY", "scoring-key")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with JudgeGateway(
+        upstream_url="http://upstream:8087", limits=JudgeBudgetLimits(max_calls=10)
+    ) as gateway:
+        gateway.meter.record_refusal("an earlier project's refusal", scope="different-job")
+        payload = _evaluation_hook(source, tmp_path, judge_gateway=gateway)(
+            context, _NONEMPTY_REPORT
+        )
+
+    assert payload["status"] == "success"
+
+
+def test_an_upstream_judge_failure_fails_only_its_evaluation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kata_sn60.execution.judge_gateway import JudgeBudgetLimits, JudgeGateway
+
+    source = _gateway_source(tmp_path)
+    context = _make_context(tmp_path, source)
+    Path(context.report_path).parent.mkdir(parents=True, exist_ok=True)
+
+    def fake_run(cmd, *args, **kwargs):
+        scope = str(sn60_synthetic_ids(context).job_run_id)
+        hold = gateway.meter.reserve(request_chars=10, scope=scope)
+        gateway.meter.settle_worst_case(hold)
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout='{"status": "success", "result": {"detection_rate": 0.0}}',
+            stderr="",
+        )
+
+    monkeypatch.setenv("CHUTES_API_KEY", "scoring-key")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with JudgeGateway(
+        upstream_url="http://upstream:8087", limits=JudgeBudgetLimits(max_calls=10)
+    ) as gateway:
+        payload = _evaluation_hook(source, tmp_path, judge_gateway=gateway)(
+            context, _NONEMPTY_REPORT
+        )
+
+    assert payload["status"] == "error"
+    assert "upstream failure" in payload["error"]
+    assert payload["result"] == {}
+
+
+def test_the_challenge_deadline_bounds_the_project_subprocess_timeout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kata_sn60.execution.judge_gateway import JudgeBudgetLimits, JudgeGateway
+
+    source = _gateway_source(tmp_path)
+    context = _make_context(tmp_path, source)
+    Path(context.report_path).parent.mkdir(parents=True, exist_ok=True)
+
+    captured = {}
+
+    def fake_run(cmd, *args, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout='{"status": "success"}', stderr="")
+
+    monkeypatch.setenv("CHUTES_API_KEY", "scoring-key")
+    # The per-project timeout alone is an hour, and several projects run concurrently.
+    monkeypatch.setenv("KATA_SN60_EVALUATION_TIMEOUT_SECONDS", "3600")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with JudgeGateway(
+        upstream_url="http://upstream:8087",
+        limits=JudgeBudgetLimits(max_calls=10, challenge_deadline_seconds=90),
+    ) as gateway:
+        _evaluation_hook(source, tmp_path, judge_gateway=gateway)(context, _NONEMPTY_REPORT)
+
+    assert 0 < captured["timeout"] <= 90
+
+
+def test_a_project_scored_after_the_deadline_is_refused_without_spawning_the_scorer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kata_sn60.execution.judge_gateway import JudgeBudgetLimits, JudgeGateway
+
+    source = _gateway_source(tmp_path)
+    context = _make_context(tmp_path, source)
+    Path(context.report_path).parent.mkdir(parents=True, exist_ok=True)
+
+    def fake_run(cmd, *args, **kwargs):  # pragma: no cover - must never be reached
+        raise AssertionError("the scorer must not run once the judge deadline has passed")
+
+    monkeypatch.setenv("CHUTES_API_KEY", "scoring-key")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    clock = iter([0.0] + [1000.0] * 50)
+    with JudgeGateway(
+        upstream_url="http://upstream:8087",
+        limits=JudgeBudgetLimits(max_calls=10, challenge_deadline_seconds=60),
+        clock=lambda: next(clock),
+    ) as gateway:
+        payload = _evaluation_hook(source, tmp_path, judge_gateway=gateway)(
+            context, _NONEMPTY_REPORT
+        )
+
+    assert payload["status"] == "error"
+    assert "deadline elapsed" in payload["error"]
