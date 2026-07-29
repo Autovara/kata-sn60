@@ -7,7 +7,51 @@ from pathlib import Path
 import pytest
 from kata.cli import build_parser, main, parse_challenge_candidate
 
-from kata_sn60.cli import sn60_challenge_result_json
+from kata_sn60.cli import sn60_build_challenge_config, sn60_challenge_result_json
+from kata_sn60.plugin import Sn60BitsecPlugin
+
+
+def _parse_sn60_challenge_args(*extra: str):
+    return build_parser().parse_args(
+        [
+            "challenge",
+            "--evaluator",
+            "sn60_bitsec",
+            "--king-path",
+            "/king",
+            "--candidate",
+            "candidate=/candidate",
+            *extra,
+        ]
+    )
+
+
+def test_sn60_challenge_cli_uses_deployment_replica_count_when_flag_is_omitted(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("KATA_SN60_REPLICAS_PER_PROJECT", "3")
+
+    config = sn60_build_challenge_config(_parse_sn60_challenge_args())
+
+    assert "replicas_per_project" not in config
+    assert Sn60BitsecPlugin()._replicas_per_project(config) == 3
+
+
+def test_sn60_challenge_cli_replica_override_is_explicit_and_fail_closed(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("KATA_SN60_REPLICAS_PER_PROJECT", "3")
+
+    explicit = sn60_build_challenge_config(
+        _parse_sn60_challenge_args("--sn60-replicas-per-project", "5")
+    )
+    assert Sn60BitsecPlugin()._replicas_per_project(explicit) == 5
+
+    invalid = sn60_build_challenge_config(
+        _parse_sn60_challenge_args("--sn60-replicas-per-project", "0")
+    )
+    with pytest.raises(ValueError, match="must be positive"):
+        Sn60BitsecPlugin()._replicas_per_project(invalid)
 
 
 def test_sn60_challenge_result_json_preserves_projects_and_execution_screening() -> None:

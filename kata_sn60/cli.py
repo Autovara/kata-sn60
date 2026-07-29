@@ -34,13 +34,19 @@ def sn60_add_challenge_arguments(parser) -> None:
 
 
 def sn60_build_challenge_config(args) -> dict:
-    return {
+    config = {
         "sandbox_root": args.sn60_sandbox_root,
         "benchmark_file": args.sn60_benchmark_file,
         "sandbox_commit": args.sn60_sandbox_commit,
         "project_keys": args.sn60_project_key or None,
-        "replicas_per_project": args.sn60_replicas_per_project or DEFAULT_REPLICAS_PER_PROJECT,
     }
+    # Absence is meaningful: it lets the plugin resolve the deployment-owned
+    # KATA_SN60_REPLICAS_PER_PROJECT value. Only an explicit CLI override belongs
+    # in the challenge config. Use ``is not None`` so invalid values such as zero
+    # reach the plugin's fail-closed validation instead of silently becoming 1.
+    if args.sn60_replicas_per_project is not None:
+        config["replicas_per_project"] = args.sn60_replicas_per_project
+    return config
 
 
 def sn60_challenge_result_json(result) -> dict:
