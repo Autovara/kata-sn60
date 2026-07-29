@@ -31,3 +31,8 @@ jobs:
         working-directory: kata-sn60
       - run: uv run --extra dev pytest -q
         working-directory: kata-sn60
+      # The vendored sandbox is what the lane scores against. Verifying it here means a tampered or
+      # drifted tree fails the build rather than a round -- and it runs on a fresh checkout, so it
+      # checks what is committed, not what happens to be on a developer's disk.
+      - run: uv run python tools/vendor_sandbox.py verify
+        working-directory: kata-sn60

@@ -27,6 +27,10 @@ packages = ["kata_sn60"]
 kata = { path = "../kata", editable = true }
 
 [tool.ruff]
+# The vendored sandbox is EVIDENCE, not our source. Linting it would be meaningless -- it is
+# upstream's code at a pinned commit -- and worse, ruff writes a .ruff_cache into whatever it walks,
+# which the manifest correctly reports as an unlisted file and refuses. Caught exactly that way.
+extend-exclude = ["sandbox"]
 line-length = 100
 target-version = "py312"
 
@@ -35,3 +39,6 @@ select = ["E", "F", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The vendored sandbox ships upstream's own test suite. It is part of the pinned tree and must stay
+# byte-identical, but it is not ours to run.
+norecursedirs = ["sandbox", ".venv", "dist"]

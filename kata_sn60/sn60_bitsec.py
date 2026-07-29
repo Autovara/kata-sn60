@@ -22,6 +22,7 @@ from kata.submissions.bundle import (
 )
 from kata.util import write_json
 
+from kata_sn60 import sandbox_snapshot
 from kata_sn60.execution.policy import tee_execution_enabled
 from kata_sn60.king_cache import (
     KingScoreboard,
@@ -35,6 +36,12 @@ DEFAULT_SANDBOX_INFERENCE_API = "http://bitsec_proxy:8000"
 DEFAULT_EVAL_MAX_VULNS = 100
 DEFAULT_REPLICAS_PER_PROJECT = 1
 DEFAULT_BENCHMARK_FILENAME = "curated-highs-only-2025-08-08.json"
+
+#: Opt-in for a sandbox tree whose provenance CANNOT be established -- no `.git`, no manifest.
+#: Exists so tests and hermetic mirrors keep working, and is deliberately awkward: the previous
+#: behaviour was to accept such a tree silently, which is how an unverified commit reaches a
+#: published result.
+UNVERIFIED_SANDBOX_ENV = "KATA_SN60_ALLOW_UNVERIFIED_SANDBOX"
 # The upstream sandbox version documented for the live SN60 lane.  Operators
 # must deliberately pass a new commit after reviewing scorer/benchmark changes.
 DEFAULT_SANDBOX_COMMIT = "069ae1e2f152370fa97f3397d8a8f8aed5a78539"
@@ -418,6 +425,18 @@ def resolve_sn60_sandbox_source(
     expected_commit = (
         sandbox_commit or os.environ.get(SANDBOX_COMMIT_ENV, "").strip() or DEFAULT_SANDBOX_COMMIT
     )
+    # Three cases, and only one of them may go unverified.
+    #
+    # A CLONE proves its commit from `.git`, as it always did. A VENDORED tree has no `.git` -- it
+    # is `git archive` output -- so it proves the same thing structurally, from a manifest of
+    # per-file digests: a changed file, a missing file, an EXTRA file, a symlink or an escaping
+    # path are all refusals.
+    #
+    # The third case is the one that used to swallow the second. This branch previously read "if
+    # there is no .git, trust the caller's commit", written for unit tests and hermetic mirrors.
+    # A vendored tree takes that branch too, so moving the sandbox into this repository without
+    # this change would have converted every published result's commit from a verified fact into
+    # an unchecked assertion -- while looking like a pure relocation.
     if (resolved_sandbox_root / ".git").exists():
         actual_commit = resolve_git_commit(resolved_sandbox_root)
         if actual_commit != expected_commit:
@@ -426,10 +445,31 @@ def resolve_sn60_sandbox_source(
                 f"pinned {expected_commit}, actual {actual_commit}."
             )
         resolved_commit = actual_commit
-    else:
-        # Unit tests and hermetic scorer mirrors may not retain `.git`; their
-        # caller still supplies the exact commit recorded in provenance.
+    elif sandbox_snapshot.is_vendored(resolved_sandbox_root):
+        manifest = sandbox_snapshot.manifest(resolved_sandbox_root)
+        manifest_commit = str(manifest.get("upstream_commit") or "")
+        if manifest_commit != expected_commit:
+            raise ValueError(
+                "Pinned SN60 sandbox commit does not match the vendored tree: "
+                f"pinned {expected_commit}, vendored {manifest_commit}."
+            )
+        # Raises on any drift. The digest is what makes the commit above a claim about THESE bytes
+        # rather than about a label written next to them.
+        sandbox_snapshot.require_verified(resolved_sandbox_root)
+        resolved_commit = manifest_commit
+    elif os.environ.get(UNVERIFIED_SANDBOX_ENV, "").strip() == "1":
+        # Deliberate, explicit, and named. A hermetic scorer mirror built inside a test has neither
+        # `.git` nor a manifest; it must still be possible to score against one. Requiring the
+        # caller to say so out loud keeps "I could not check" from being spelled the same way as
+        # "I checked".
         resolved_commit = expected_commit
+    else:
+        raise ValueError(
+            f"SN60 sandbox at {resolved_sandbox_root} has neither a .git directory nor a "
+            f"{sandbox_snapshot.MANIFEST_NAME}, so the commit it claims ({expected_commit}) cannot "
+            f"be verified. Point the lane at a clone or a vendored tree, or set "
+            f"{UNVERIFIED_SANDBOX_ENV}=1 to score an unverified mirror deliberately."
+        )
     return Sn60SandboxSource(
         sandbox_root=str(resolved_sandbox_root),
         benchmark_file=str(resolved_benchmark_file),
@@ -489,14 +529,20 @@ def validate_sn60_project_keys(
 
 
 def default_sandbox_root() -> Path:
+    """Where the lane looks for the sandbox when nothing overrides it.
+
+    The environment still wins, so an operator pointing at `/srv/sandbox` gets exactly the previous
+    behaviour and the deployed lane is unaffected by this change.
+
+    The fallback used to be a workspace sibling four directories above the package -- on a normal
+    checkout, a path that does not exist. It "worked" only because ``KATA_SN60_SANDBOX_ROOT`` is
+    always set in production, so the default was an untested guess. It is now the vendored tree that
+    ships with this plugin, which is a path that exists by construction.
+    """
     env_root = os.environ.get("KATA_SN60_SANDBOX_ROOT")
     if env_root and env_root.strip():
         return Path(env_root).expanduser().resolve()
-    return workspace_root() / "sandbox"
-
-
-def workspace_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    return sandbox_snapshot.vendored_root()
 
 
 def resolve_git_commit(repo_root: Path) -> str:

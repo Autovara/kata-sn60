@@ -175,4 +175,16 @@ Set your HTTP client timeout a little above 180 s (195 s in the example). The ro
 
 ## The benchmark and scorer
 
-SN60 scoring is defined by the upstream Bitsec subnet ([`Bitsec-AI/sandbox`](https://github.com/Bitsec-AI/sandbox)), pinned to a reviewed commit and run out-of-process. kata-sn60 never vendors or imports it, so scores stay aligned with the live subnet. Operators bump the pin deliberately after re-review; see `deploy/sn60-runner/` for building and deploying the SN60 runner image.
+SN60 scoring is defined by the upstream Bitsec subnet ([`Bitsec-AI/sandbox`](https://github.com/Bitsec-AI/sandbox)), pinned to a reviewed commit and **run out-of-process**. kata-sn60 does not import it; the pinned tree is executed as upstream wrote it, so scores stay aligned with the live subnet.
+
+The tree is **vendored into this repository** at `sandbox/`, produced by `git archive` at the pinned commit and pinned again by `sandbox/SANDBOX_MANIFEST.json` — a per-file digest list plus one digest over the whole tree. It used to be a clone on the deployment host. See [`docs/DECISION-vendor-the-sandbox.md`](docs/DECISION-vendor-the-sandbox.md) for why that changed and what had to change with it.
+
+Re-pinning at a new upstream commit is deliberate, never a side effect of a build:
+
+```bash
+git -C <sandbox-clone> archive --format=tar <commit> | tar -x -C sandbox/
+uv run python tools/vendor_sandbox.py write     # regenerate the manifest, after review
+uv run python tools/vendor_sandbox.py verify    # what CI and smoke run
+```
+
+Operators bump the pin deliberately after re-review; see `deploy/sn60-runner/` for building and deploying the SN60 runner image.
