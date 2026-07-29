@@ -32,6 +32,46 @@ from room.profile import (
 FIXTURE_AGENT = "/app/fixture_agent.py"
 
 
+def _docker_error(completed) -> str:
+    detail = completed.stderr or completed.stdout or f"docker exited {completed.returncode}"
+    return detail.strip()[:500]
+
+
+def _remove_container(name: str, *, allow_missing: bool = True) -> None:
+    removed = docker(["rm", "-f", name])
+    if removed.returncode == 0:
+        return
+    detail = _docker_error(removed)
+    if allow_missing and "no such container" in detail.lower():
+        return
+    raise RuntimeError(f"could not remove SN60 container {name}: {detail}")
+
+
+def _remove_volume(name: str, *, allow_missing: bool = True) -> None:
+    removed = docker(["volume", "rm", "-f", name])
+    if removed.returncode == 0:
+        return
+    detail = _docker_error(removed)
+    if allow_missing and "no such volume" in detail.lower():
+        return
+    raise RuntimeError(f"could not remove SN60 volume {name}: {detail}")
+
+
+def _cleanup_resources(container: str, staging: str, volumes: tuple[str, ...]) -> None:
+    errors = []
+    for remove, name in (
+        (_remove_container, container),
+        (_remove_container, staging),
+        *((_remove_volume, volume) for volume in volumes),
+    ):
+        try:
+            remove(name)
+        except RuntimeError as exc:
+            errors.append(str(exc))
+    if errors:
+        raise RuntimeError("; ".join(errors))
+
+
 class Sn60TeeProfile:
     fixture_project = "fixture-project"
 
@@ -118,8 +158,14 @@ class Sn60TeeProfile:
         job_id: str,
     ) -> TeeJobResult:
         """Pull + run the real bitsec problem image with the MINER'S agent, mirroring the sandbox
-        executor. Uses `docker cp` (not a bind mount): with docker-in-the-room the daemon resolves
-        bind paths on the host, which can't see the runner's files.
+        executor.
+
+        The Docker daemon cannot see paths created inside the runner container, and ``docker cp``
+        cannot modify a container whose root filesystem is read-only. The verified bundle therefore
+        enters a daemon-managed volume through a stopped staging container, then that volume is
+        mounted read-only into the final agent. A size-limited tmpfs volume stays mounted by the
+        staging container until the report is copied out, preserving the report without giving the
+        untrusted agent an unbounded writable disk.
         """
         ghcr_login()
         image = self.image(project_key)
@@ -135,7 +181,11 @@ class Sn60TeeProfile:
 
         container_suffix = hashlib.sha256(f"{project_key}:{job_id}".encode()).hexdigest()[:20]
         container = f"kata-sn60-{container_suffix}"
-        docker(["rm", "-f", container])
+        staging = container + "-stage"
+        bundle_volume = container + "-bundle"
+        output_volume = container + "-output"
+        volumes = (bundle_volume, output_volume)
+        _cleanup_resources(container, staging, volumes)
         # No deploy-time key exists. An inference-free agent receives empty inference settings,
         # never an operator-funded fallback. A supplied descriptor is decrypted only by the generic
         # room and its signed route prevents the agent from changing provider selection.
@@ -162,6 +212,75 @@ class Sn60TeeProfile:
                 cp_src, cp_dst, extra_env = self._prepare_agent(bundle_dir)
                 for k, v in extra_env.items():
                     env_args += ["-e", f"{k}={v}"]
+
+                created_bundle_volume = docker(["volume", "create", bundle_volume])
+                if created_bundle_volume.returncode != 0:
+                    raise RuntimeError(
+                        f"create bundle volume failed: {_docker_error(created_bundle_volume)}"
+                    )
+                created_output_volume = docker(
+                    [
+                        "volume",
+                        "create",
+                        "--driver",
+                        "local",
+                        "--opt",
+                        "type=tmpfs",
+                        "--opt",
+                        "device=tmpfs",
+                        "--opt",
+                        "o=size=4m,uid=65532,gid=65532,mode=700",
+                        output_volume,
+                    ]
+                )
+                if created_output_volume.returncode != 0:
+                    raise RuntimeError(
+                        f"create output volume failed: {_docker_error(created_output_volume)}"
+                    )
+
+                create_staging = docker(
+                    [
+                        "create",
+                        "--name",
+                        staging,
+                        "--network",
+                        "none",
+                        "--cap-drop",
+                        "ALL",
+                        "--security-opt",
+                        "no-new-privileges",
+                        "--pids-limit",
+                        "16",
+                        "--memory",
+                        "32m",
+                        "--cpus",
+                        "0.1",
+                        "--log-driver",
+                        "none",
+                        "--mount",
+                        f"type=volume,source={bundle_volume},target={cp_dst}",
+                        "--mount",
+                        f"type=volume,source={output_volume},target=/kata_output",
+                        "--entrypoint",
+                        "python",
+                        image,
+                        "-c",
+                        "import time; time.sleep(86400)",
+                    ]
+                )
+                if create_staging.returncode != 0:
+                    raise RuntimeError(
+                        f"create staging container failed: {_docker_error(create_staging)}"
+                    )
+                cp_in = docker(["cp", f"{cp_src}/.", f"{staging}:{cp_dst}"])
+                if cp_in.returncode != 0:
+                    raise RuntimeError(f"cp agent in failed: {_docker_error(cp_in)}")
+                start_staging = docker(["start", staging])
+                if start_staging.returncode != 0:
+                    raise RuntimeError(
+                        f"start staging container failed: {_docker_error(start_staging)}"
+                    )
+
                 create = docker(
                     [
                         "create",
@@ -183,32 +302,40 @@ class Sn60TeeProfile:
                         "0.25",
                         "--pids-limit",
                         "64",
+                        "--log-driver",
+                        "none",
                         "--tmpfs",
                         "/tmp:rw,noexec,nosuid,size=64m,uid=65532,gid=65532,mode=700",
-                        "--tmpfs",
-                        "/kata_output:rw,noexec,nosuid,size=4m,uid=65532,gid=65532,mode=700",
+                        "--mount",
+                        f"type=volume,source={bundle_volume},target={cp_dst},readonly",
+                        "--mount",
+                        f"type=volume,source={output_volume},target=/kata_output",
                         image,
                     ]
                 )
                 if create.returncode != 0:
-                    raise RuntimeError(f"create failed: {create.stderr[:400]}")
-                cp_in = docker(["cp", cp_src, f"{container}:{cp_dst}"])
-                if cp_in.returncode != 0:
-                    raise RuntimeError(f"cp agent in failed: {cp_in.stderr[:400]}")
+                    raise RuntimeError(f"create failed: {_docker_error(create)}")
                 # The generic room setting is a total process safety limit, not
                 # a model/token/call/retry policy. It leaves the agent free to
                 # use its own miner-funded provider strategy within the job.
                 start = docker(
-                    ["start", "-a", container],
+                    ["start", container],
+                )
+                if start.returncode != 0:
+                    raise RuntimeError(f"start failed: {_docker_error(start)}")
+                wait = docker(
+                    ["wait", container],
                     timeout=resolve_agent_execution_timeout_seconds(),
-                )  # -a waits for exit
+                )
+                if wait.returncode != 0:
+                    raise RuntimeError(f"wait failed: {_docker_error(wait)}")
                 cp_out = docker(
-                    ["cp", f"{container}:/kata_output/report.json", str(workdir / "report.json")]
+                    ["cp", f"{staging}:/kata_output/report.json", str(workdir / "report.json")]
                 )
                 if cp_out.returncode != 0:
                     raise RuntimeError(
                         "no report.json. "
-                        f"start stderr: {start.stderr[:500]} stdout: {start.stdout[:300]}"
+                        f"agent exit: {(wait.stdout or '').strip()[:100]}"
                     )
                 report = json.loads((workdir / "report.json").read_text())
             digest = docker(
@@ -226,4 +353,4 @@ class Sn60TeeProfile:
                 },
             )
         finally:
-            docker(["rm", "-f", container])
+            _cleanup_resources(container, staging, volumes)
