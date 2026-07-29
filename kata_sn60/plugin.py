@@ -21,6 +21,7 @@ from kata.plugins.contract import (
     SubnetPlugin,
 )
 
+from kata_sn60 import sandbox_snapshot
 from kata_sn60.execution.policy import tee_execution_enabled
 from kata_sn60.execution.scorer_runtime import SCORER_RUNTIME_ROOT_ENV, ScorerRuntime
 from kata_sn60.king_cache import benchmark_version_key
@@ -235,7 +236,47 @@ class Sn60BitsecPlugin(SubnetPlugin):
                 check()
             except (RuntimeError, ValueError, OSError) as exc:
                 issues.append({"level": "error", "message": str(exc)})
+        issues.extend(self._preflight_proxy_image())
         return issues
+
+    def _preflight_proxy_image(self) -> list[dict[str, str]]:
+        """Whether the scoring proxy is pinned, and whether the running one matches.
+
+        A WARNING rather than an error when unpinned: an unpinned lane still scores correctly, it
+        just cannot prove which proxy answered. Saying so here is the difference between an
+        operator knowing that before go-live and discovering it while auditing a disputed round.
+        """
+        from kata_sn60.execution.proxy_image import (
+            PROXY_IMAGE_DIGEST_ENV,
+            ProxyImageError,
+            pinned_digest,
+            verify_proxy_image,
+        )
+
+        if not self.uses_default_evaluation:
+            return []
+        try:
+            source = resolve_sn60_sandbox_source(
+                sandbox_root=None, benchmark_file=None, sandbox_commit=None,
+                scorer_version=self._scorer_version,
+            )
+            record = verify_proxy_image(
+                expected_sandbox_commit=source.sandbox_commit,
+                expected_tree_sha256=sandbox_snapshot.tree_sha256_for(Path(source.sandbox_root)),
+            )
+        except ProxyImageError as exc:
+            return [{"level": "error", "message": str(exc)}]
+        except (RuntimeError, ValueError, OSError) as exc:
+            return [{"level": "error", "message": f"cannot check the SN60 proxy image: {exc}"}]
+        if record.verified:
+            return []
+        detail = record.reason or f"{PROXY_IMAGE_DIGEST_ENV} is not set"
+        if not pinned_digest():
+            detail += (
+                f"; build it from the verified tree with tools/build_proxy_image.py and set "
+                f"{PROXY_IMAGE_DIGEST_ENV} to the digest it prints"
+            )
+        return [{"level": "warning", "message": f"SN60 scoring proxy is unpinned: {detail}"}]
 
     @staticmethod
     def _preflight_room() -> None:

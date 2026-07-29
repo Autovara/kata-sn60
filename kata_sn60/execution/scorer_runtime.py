@@ -191,7 +191,12 @@ class ScorerRuntime:
             command = [
                 "uv",
                 "sync",
-                "--frozen",
+                # --locked, NOT --frozen. Both refuse to WRITE the lockfile, but only --locked
+                # refuses when the lockfile does not describe the project: --frozen silently
+                # installs from a stale lock, so a pyproject that gained a dependency the lock
+                # never resolved would score against a dependency set nobody reviewed and report
+                # success. Verified by asking uv both ways with a deliberately mismatched project.
+                "--locked",
                 "--no-dev",
                 "--no-install-project",
                 "--project",

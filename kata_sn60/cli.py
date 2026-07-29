@@ -63,6 +63,9 @@ def sn60_challenge_result_json(result) -> dict:
         # What the LLM judge actually cost this challenge. None when the lane configured no judge
         # budget, which is itself the operator-visible signal that the round ran unmetered.
         "judge_usage": getattr(result, "judge_usage", None),
+        # Which proxy image answered the judge calls, and whether it matched its pin and the
+        # scorer revision. A score is only as attributable as the container that produced it.
+        "proxy_image": getattr(result, "proxy_image", None),
         "king": sn60_variant_detail(result.king) if result.king else None,
         "entries": [
             {
@@ -287,6 +290,7 @@ def handle_sn60_baseline(args) -> int:
                 "project_keys": result.project_keys,
                 "replicas_per_project": result.replicas_per_project,
                 "judge_usage": result.judge_usage,
+                "proxy_image": result.proxy_image,
                 "sandbox_source": {
                     "sandbox_root": result.sandbox_source.sandbox_root,
                     "benchmark_file": result.sandbox_source.benchmark_file,

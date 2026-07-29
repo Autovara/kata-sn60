@@ -16,7 +16,9 @@ from pathlib import Path
 
 from kata.core.challenge import ChallengeOutcome, ScoredVariant, run_plugin_challenge
 
+from kata_sn60 import sandbox_snapshot
 from kata_sn60.execution.judge_gateway import JudgeGateway, judge_limits_from_env
+from kata_sn60.execution.proxy_image import verify_proxy_image
 from kata_sn60.execution.scorer_runtime import ScorerRuntime
 from kata_sn60.sn60_bitsec import (
     DEFAULT_SANDBOX_PROXY_URL,
@@ -95,6 +97,7 @@ def build_sn60_challenge_result(
     screened_labels: frozenset[str] = frozenset(),
     always_write_candidate_summary: bool = False,
     judge_usage: dict[str, object] | None = None,
+    proxy_image: dict[str, object] | None = None,
 ) -> Sn60ChallengeResult:
     """Reconstruct the SN60 challenge result from a generic outcome and write it.
 
@@ -188,6 +191,7 @@ def build_sn60_challenge_result(
         winner_challenge_summary_path=winner_challenge_summary_path,
         competition_mode="king_duel",
         judge_usage=judge_usage,
+        proxy_image=proxy_image,
     )
     write_sn60_challenge_result(Path(output_root) / "challenge_result.json", result)
     return result
@@ -304,6 +308,17 @@ def run_sn60_plugin_challenge(
     # every candidate -- rather than one per project. Its caps then bound what this duel can spend
     # on the LLM judge no matter how many projects, replicas or findings it turns out to involve.
     judge_limits = judge_limits_from_env()
+    # BEFORE any paid scoring: the judge's answers come from the proxy container, so an
+    # unattributable proxy makes every score in this challenge unattributable too. Checked once per
+    # challenge rather than per replica -- a container cannot change underneath a running duel
+    # without the round failing anyway -- and recorded either way so an unpinned deployment is
+    # visible in the published result instead of only in an operator's memory.
+    proxy_provenance = verify_proxy_image(
+        expected_sandbox_commit=problems.sandbox_source.sandbox_commit,
+        expected_tree_sha256=sandbox_snapshot.tree_sha256_for(
+            Path(problems.sandbox_source.sandbox_root)
+        ),
+    ).as_dict()
     with ExitStack() as stack:
         judge_gateway = None
         if scorer_runtime is not None:
@@ -349,4 +364,5 @@ def run_sn60_plugin_challenge(
         screened_labels=frozenset(screened_labels),
         always_write_candidate_summary=always_write_candidate_summary,
         judge_usage=judge_usage,
+        proxy_image=proxy_provenance,
     )

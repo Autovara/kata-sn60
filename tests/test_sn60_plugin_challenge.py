@@ -491,3 +491,37 @@ def test_the_capacity_estimate_declares_no_judge_bound_when_unconfigured() -> No
     )
 
     assert set(bounds) == {"tee_runs"}
+
+
+def test_the_published_result_records_which_proxy_answered(tmp_path: Path) -> None:
+    """A score is only as attributable as the container that produced it. The record rides with the
+    result -- including when the deployment is unpinned, so 'we could not tell' is auditable after
+    the fact rather than remembered."""
+    from kata_sn60.cli import sn60_challenge_result_json
+
+    sandbox_root, benchmark_path, king_root, specs, paths = _build_inputs(tmp_path)
+    execute, evaluate = _detection_hooks()
+
+    result = run_sn60_plugin_challenge(
+        king_artifact_path=str(king_root),
+        candidates=[("cand-a", paths["cand-a"])],
+        config={
+            "sandbox_root": str(sandbox_root),
+            "benchmark_file": str(benchmark_path),
+            "sandbox_commit": "commit-proxy",
+            "project_keys": ["project-alpha"],
+            "replicas_per_project": 1,
+        },
+        output_root=str(tmp_path / "proxy"),
+        plugin=Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate),
+    )
+
+    record = result.proxy_image
+    assert record is not None
+    assert set(record) >= {"container", "image_digest", "pinned_digest", "sandbox_commit",
+                           "sandbox_tree_sha256", "verified", "reason"}
+    assert sn60_challenge_result_json(result)["proxy_image"] == record
+    written = json.loads(
+        (Path(result.output_root) / "challenge_result.json").read_text(encoding="utf-8")
+    )
+    assert written["proxy_image"] == record

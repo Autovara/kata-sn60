@@ -67,7 +67,7 @@ def test_prepare_builds_once_outside_the_verified_source_and_never_changes_it(
     assert len(calls) == 1
     command, kwargs = calls[0]
     assert command[:2] == ["uv", "sync"]
-    assert "--frozen" in command
+    assert "--locked" in command  # --frozen would accept a stale lock; see prepare()
     assert "--no-install-project" in command
     assert command[command.index("--project") + 1] == str(source)
     assert Path(kwargs["cwd"]) == tmp_path / "runtime"

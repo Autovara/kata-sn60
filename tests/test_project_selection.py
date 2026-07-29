@@ -540,7 +540,9 @@ def test_preflight_is_silent_on_a_workable_deployment(tmp_path, monkeypatch, sam
     _sandbox(tmp_path, monkeypatch, ["p1", "p2", "p3", "p4"])
     monkeypatch.setenv("KATA_SN60_PROJECT_SAMPLE_SIZE", "2")
 
-    assert _plugin().preflight() == []
+    # Errors only: preflight also reports proxy-image pinning, which has its own tests and is
+    # a warning about the deployment rather than a problem with project selection.
+    assert [i for i in _plugin().preflight() if i["level"] == "error"] == []
 
 
 def test_preflight_reports_what_the_round_would_have_raised(
@@ -556,8 +558,9 @@ def test_preflight_reports_what_the_round_would_have_raised(
 
     issues = _plugin().preflight()
 
-    assert [issue["level"] for issue in issues] == ["error"]
-    assert "only 2" in issues[0]["message"]
+    errors = [issue for issue in issues if issue["level"] == "error"]
+    assert [issue["level"] for issue in errors] == ["error"]
+    assert "only 2" in errors[0]["message"]
 
 
 def test_preflight_reports_an_unusable_replica_count(tmp_path, monkeypatch, sampling) -> None:
@@ -581,7 +584,7 @@ def test_preflight_reports_every_problem_not_just_the_first(
     monkeypatch.setenv("KATA_SN60_PROJECT_SAMPLE_SIZE", "3")
     monkeypatch.setenv("KATA_SN60_REPLICAS_PER_PROJECT", "nope")
 
-    assert len(_plugin().preflight()) == 2
+    assert len([i for i in _plugin().preflight() if i["level"] == "error"]) == 2
 
 
 def test_a_missing_benchmark_is_reported_not_raised(tmp_path, monkeypatch, sampling) -> None:
@@ -592,4 +595,4 @@ def test_a_missing_benchmark_is_reported_not_raised(tmp_path, monkeypatch, sampl
 
     issues = _plugin().preflight()
 
-    assert issues and issues[0]["level"] == "error"
+    assert any(issue["level"] == "error" for issue in issues)

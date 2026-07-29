@@ -73,14 +73,99 @@ def identity() -> SnapshotIdentity:
 def vendored_root() -> Path:
     """The vendored sandbox tree that ships with this plugin.
 
-    ``KATA_SN60_VENDORED_SANDBOX_ROOT`` exists for the installed layout, where the trusted installer
-    places the tree beside the package rather than inside the wheel. Read once, here, so exactly one
-    place decides which tree the lane scores against.
+    Beside the package, in both layouts that matter: a source checkout has ``<repo>/sandbox``, and a
+    deployed lane is installed with ``uv run --with-editable /srv/kata-sn<N>``, so the staged source
+    tree is what lands on ``sys.path`` and the sibling is ``/srv/kata-sn<N>/sandbox``.
+
+    The tree is NOT packaged into the wheel. It would have to live inside ``kata_sn60/`` to travel
+    in one, and then pip byte-compiles it on install -- every ``__pycache__/*.pyc`` landing in the
+    pinned tree as an unlisted file that fails verification on every round.
+
+    ``KATA_SN60_VENDORED_SANDBOX_ROOT`` overrides both, for a layout neither fits. Read once, here,
+    so exactly one place decides which tree the lane scores against.
     """
     override = os.environ.get("KATA_SN60_VENDORED_SANDBOX_ROOT")
     if override and override.strip():
         return Path(override.strip()).expanduser().resolve()
     return (Path(__file__).resolve().parent.parent / VENDORED_DIRNAME).resolve()
+
+
+#: Working-tree states that make a clone unusable as evidence, keyed by the two-column code
+#: ``git status --porcelain`` reports. Every one of them means the bytes on disk are not the bytes
+#: the pinned commit names.
+_CLONE_STATUS_REASONS = {
+    "??": "untracked file in the clone",
+    "!!": "ignored file in the clone",
+}
+
+
+def clone_findings(root: Path, *, expected_commit: str, runner=None) -> list[str]:
+    """Everything that makes a git CLONE fail to prove the commit it claims.
+
+    A vendored tree proves its commit from per-file digests. A clone was only ever asked for
+    ``git rev-parse HEAD``, which answers "which commit is checked out" and NOT "is the working
+    tree that commit" -- so a dirty ``executor.py``, a deleted benchmark, or an extra file all
+    passed while the published result still named the pinned revision.
+
+    The finding set is deliberately the same shape as ``verify_snapshot``'s: modified, missing,
+    untracked, ignored and unexpected files are each a refusal. IGNORED files matter as much as
+    untracked ones and are easy to forget -- ``.gitignore`` hides them from ``git status`` by
+    default, yet Python will happily import a ``.pyc`` or a gitignored module sitting in the tree.
+    (This is not hypothetical: a stray ``uv sync`` drops a fully importable ``.venv`` into the
+    source that plain ``git status`` reports as nothing at all.)
+    """
+    import subprocess
+
+    run = runner or subprocess.run
+    root = Path(root)
+    findings: list[str] = []
+
+    def _git(*args: str) -> subprocess.CompletedProcess:
+        return run(
+            ["git", "-C", str(root), *args], capture_output=True, text=True, check=False
+        )
+
+    head = _git("rev-parse", "HEAD")
+    if head.returncode != 0:
+        findings.append(f"cannot resolve HEAD: {(head.stderr or '').strip()}")
+        return findings
+    actual_commit = (head.stdout or "").strip()
+    if actual_commit != expected_commit:
+        findings.append(f"HEAD is {actual_commit}, expected {expected_commit}")
+
+    # --ignored=matching lists ignored files individually rather than collapsing them into their
+    # directory, so a single planted file is named instead of hidden behind a directory entry.
+    status = _git(
+        "status", "--porcelain", "--untracked-files=all", "--ignored=matching"
+    )
+    if status.returncode != 0:
+        findings.append(f"cannot read working tree status: {(status.stderr or '').strip()}")
+        return findings
+    for line in (status.stdout or "").splitlines():
+        if not line.strip():
+            continue
+        code, _, relative = line[:2], line[2:3], line[3:]
+        reason = _CLONE_STATUS_REASONS.get(code)
+        if reason is None:
+            # Any other porcelain code is a tracked path that differs from HEAD: modified, deleted,
+            # staged, renamed, copied or unmerged. Naming the raw code keeps the message honest
+            # rather than guessing at a category.
+            reason = f"tracked file differs from the pinned commit (status {code!r})"
+        findings.append(f"{relative}: {reason}")
+    return findings
+
+
+def require_verified_clone(root: Path, *, expected_commit: str, runner=None) -> str:
+    """Verify a clone and return its commit, or raise ``SnapshotError``. Fails closed."""
+    findings = clone_findings(root, expected_commit=expected_commit, runner=runner)
+    if findings:
+        shown = "; ".join(findings[:20])
+        more = f" (+{len(findings) - 20} more)" if len(findings) > 20 else ""
+        raise SnapshotError(
+            f"SN60 sandbox clone at {root} does not match pinned commit {expected_commit}: "
+            f"{shown}{more}"
+        )
+    return expected_commit
 
 
 def is_vendored(root: Path) -> bool:
@@ -113,6 +198,21 @@ def build_manifest(root: Path | None = None) -> dict:
     return compute_manifest(root, identity())
 
 
+def tree_sha256_for(root: Path | None = None) -> str:
+    """The vendored tree's digest, or ``""`` when the tree is not a vendored one.
+
+    Empty for a clone by design: a clone has no manifest, so there is no tree digest to bind a
+    proxy image to. Callers treat empty as "cannot check this claim" rather than as a match.
+    """
+    root = Path(root) if root is not None else vendored_root()
+    if not is_vendored(root):
+        return ""
+    try:
+        return str(manifest(root).get("tree_sha256") or "")
+    except SnapshotError:
+        return ""
+
+
 def sandbox_identity(root: Path | None = None) -> dict:
     """The three fields every provenance record quotes about the sandbox."""
     document = manifest(root)
@@ -134,6 +234,7 @@ __all__ = [
     "manifest",
     "require_verified",
     "sandbox_identity",
+    "tree_sha256_for",
     "upstream_commit",
     "vendored_root",
     "verify",

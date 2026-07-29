@@ -21,6 +21,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
+# Only the package. The vendored sandbox is deliberately NOT force-included into the wheel: the
+# lane is installed with `uv run --with-editable /srv/kata-sn60`, so the staged SOURCE TREE is what
+# ends up on sys.path and `sandbox/` sits beside the package exactly as it does in a checkout.
+# Shipping it inside the wheel instead makes pip byte-compile the pinned tree, and every resulting
+# __pycache__/*.pyc is an unlisted file that fails manifest verification on every round.
 packages = ["kata_sn60"]
 
 [tool.uv.sources]

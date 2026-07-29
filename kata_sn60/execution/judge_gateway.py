@@ -93,6 +93,16 @@ class JudgeUsage:
     #: Calls forwarded that failed upstream (timeout, connection, non-2xx). Distinct from a
     #: refusal: the money may well have been spent, we just did not get a usable answer.
     upstream_errors: int = 0
+    #: Calls that ANSWERED but returned no readable usage receipt, charged at their reservation.
+    #:
+    #: Deliberately NOT counted as an upstream error. Both are settled at the worst case -- the
+    #: flattened proxy token fields default to zero, so a missing receipt can never be read as
+    #: "spent nothing" -- but they mean different things to the SCORE. An upstream error means the
+    #: judge never answered, so the score is incomplete and the round must fail. A missing receipt
+    #: means the judge answered fine and only the accounting is blind, so the score is complete and
+    #: failing the round would discard good work over a bookkeeping gap. Conservative on money,
+    #: precise about completeness.
+    unmetered_calls: int = 0
     #: Requests whose scorer attribution or wire format was invalid. Any non-zero value is
     #: challenge-fatal: an unattributed request cannot safely be assigned to one project.
     protocol_errors: int = 0
@@ -113,6 +123,7 @@ class JudgeUsage:
             "refusals": self.refusals,
             "first_refusal_reason": self.first_refusal_reason,
             "upstream_errors": self.upstream_errors,
+            "unmetered_calls": self.unmetered_calls,
             "protocol_errors": self.protocol_errors,
             "first_protocol_error": self.first_protocol_error,
         }
@@ -377,6 +388,7 @@ class JudgeMeter:
         output_tokens: int,
         cached_tokens: int,
         upstream_error: bool = False,
+        unmetered: bool = False,
     ) -> None:
         """Replace a hold with the call's ACTUAL usage. Idempotent: settling an unknown or
         already-settled hold is a no-op, so a retry or a double-finally cannot double-charge."""
@@ -409,16 +421,21 @@ class JudgeMeter:
                     cached_tokens=usage.cached_tokens + int(cached_tokens),
                     spend_usd=usage.spend_usd + spend,
                     upstream_errors=usage.upstream_errors + (1 if upstream_error else 0),
+                    unmetered_calls=usage.unmetered_calls + (1 if unmetered else 0),
                 )
                 if scope is None:
                     self._usage = updated
                 else:
                     self._usage_by_scope[scope] = updated
 
-    def settle_worst_case(self, hold_id: int) -> None:
-        """Settle a call whose real usage is UNKNOWN (an unparseable response, a timeout after the
-        request left) at the full reserved amount. Fail closed: we cannot prove the provider did
-        not bill us, so the budget keeps the conservative charge."""
+    def settle_worst_case(self, hold_id: int, *, upstream_error: bool = True) -> None:
+        """Settle a call whose real usage is UNKNOWN at the full reserved amount. Fail closed: we
+        cannot prove the provider did not bill us, so the budget keeps the conservative charge.
+
+        ``upstream_error=False`` records a call that ANSWERED without a readable receipt. The money
+        is charged identically; only the meaning differs, and the caller fails a round on the
+        former but not the latter.
+        """
         with self._lock:
             hold = self._holds.get(hold_id)
             if hold is None:
@@ -429,7 +446,8 @@ class JudgeMeter:
             input_tokens=reserved_in,
             output_tokens=reserved_out,
             cached_tokens=0,
-            upstream_error=True,
+            upstream_error=upstream_error,
+            unmetered=not upstream_error,
         )
 
     def settle_all_holds_worst_case(self) -> None:
@@ -739,7 +757,10 @@ class JudgeGateway:
 
         usage = _usage_from_response(response_body)
         if usage is None:
-            self._meter.settle_worst_case(hold_id)
+            # The judge ANSWERED; only its receipt is unreadable. Charged at the reservation (never
+            # at the flattened zero-default fields, which would undercount real spend) but not
+            # counted as a failure, because the score this call produced is complete.
+            self._meter.settle_worst_case(hold_id, upstream_error=False)
         else:
             self._meter.settle(hold_id, **usage)
 

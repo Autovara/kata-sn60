@@ -203,3 +203,155 @@ def test_the_vendored_tree_scores_the_same_benchmark_as_the_clone(tmp_path: Path
     ).read_bytes(), "the vendored benchmark differs from the clone's"
     assert vendored.sandbox_commit == DEFAULT_SANDBOX_COMMIT
     assert vendored.benchmark_file.endswith(DEFAULT_BENCHMARK_FILENAME)
+
+
+# --- a clone must prove the same thing the vendored tree does ------------------------------------
+#
+# A matching HEAD answers "which commit is checked out", never "is the working tree that commit".
+# These pin the finding set a clone is now held to.
+
+
+def _write_benchmark(root: Path) -> Path:
+    path = root / "validator" / DEFAULT_BENCHMARK_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps([{"project_id": "project-alpha", "vulnerabilities": [{"title": "x"}]}]) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _seed_clone(root: Path) -> str:
+    """A committed clone whose working tree matches HEAD exactly."""
+    import subprocess
+
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "validator").mkdir(parents=True, exist_ok=True)
+    (root / "validator" / "executor.py").write_text("# scorer\n", encoding="utf-8")
+    (root / ".gitignore").write_text(".venv/\n*.pyc\n", encoding="utf-8")
+    subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@e.x",
+         "commit", "--quiet", "-m", "seed"],
+        check=True,
+    )
+    return subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def test_a_pristine_clone_has_no_findings(tmp_path: Path) -> None:
+    root = tmp_path / "clone"
+    head = _seed_clone(root)
+    assert sandbox_snapshot.clone_findings(root, expected_commit=head) == []
+    assert sandbox_snapshot.require_verified_clone(root, expected_commit=head) == head
+
+
+def test_a_clone_at_the_wrong_commit_is_caught(tmp_path: Path) -> None:
+    root = tmp_path / "clone"
+    _seed_clone(root)
+    findings = sandbox_snapshot.clone_findings(root, expected_commit="0" * 40)
+    assert any("HEAD is" in f for f in findings)
+
+
+def test_a_modified_tracked_file_is_caught(tmp_path: Path) -> None:
+    """The case a bare rev-parse always passed: right commit, wrong bytes."""
+    root = tmp_path / "clone"
+    head = _seed_clone(root)
+    (root / "validator" / "executor.py").write_text("# tampered\n", encoding="utf-8")
+    findings = sandbox_snapshot.clone_findings(root, expected_commit=head)
+    assert any("executor.py" in f and "differs from the pinned commit" in f for f in findings)
+    with pytest.raises(SnapshotError, match="executor.py"):
+        sandbox_snapshot.require_verified_clone(root, expected_commit=head)
+
+
+def test_a_deleted_tracked_file_is_caught(tmp_path: Path) -> None:
+    root = tmp_path / "clone"
+    head = _seed_clone(root)
+    (root / "validator" / "executor.py").unlink()
+    findings = sandbox_snapshot.clone_findings(root, expected_commit=head)
+    assert any("executor.py" in f for f in findings)
+
+
+def test_an_untracked_file_is_caught(tmp_path: Path) -> None:
+    root = tmp_path / "clone"
+    head = _seed_clone(root)
+    (root / "validator" / "extra.py").write_text("# planted\n", encoding="utf-8")
+    findings = sandbox_snapshot.clone_findings(root, expected_commit=head)
+    assert any("extra.py" in f and "untracked" in f for f in findings)
+
+
+def test_an_ignored_file_is_caught(tmp_path: Path) -> None:
+    """Ignored files are the easy ones to miss: .gitignore hides them from plain `git status`,
+    yet Python imports them just the same. A stray `uv sync` drops an importable `.venv` into the
+    source that `git status` reports as nothing at all."""
+    root = tmp_path / "clone"
+    head = _seed_clone(root)
+    venv = root / ".venv" / "lib"
+    venv.mkdir(parents=True)
+    (venv / "sitecustomize.py").write_text("# runs on interpreter start\n", encoding="utf-8")
+    (root / "validator" / "executor.pyc").write_bytes(b"\x00")
+
+    import subprocess
+    plain = subprocess.run(
+        ["git", "-C", str(root), "status", "--porcelain"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert plain == ""  # exactly why the check cannot rely on default `git status`
+
+    findings = sandbox_snapshot.clone_findings(root, expected_commit=head)
+    assert any(".venv" in f and "ignored" in f for f in findings)
+    assert any("executor.pyc" in f and "ignored" in f for f in findings)
+
+
+def test_a_directory_that_is_not_a_git_tree_is_refused(tmp_path: Path) -> None:
+    root = tmp_path / "not-a-clone"
+    root.mkdir()
+    findings = sandbox_snapshot.clone_findings(root, expected_commit="0" * 40)
+    assert findings and "cannot resolve HEAD" in findings[0]
+
+
+def test_resolve_refuses_a_dirty_clone_end_to_end(tmp_path: Path) -> None:
+    """The published result names the pinned commit, so resolution itself must refuse."""
+    root = tmp_path / "sandbox"
+    benchmark = _write_benchmark(root)
+    head = _seed_clone(root)
+    resolve_sn60_sandbox_source(
+        sandbox_root=str(root), benchmark_file=str(benchmark),
+        sandbox_commit=head, scorer_version="ScaBenchScorerV2",
+    )
+    (root / "validator" / "executor.py").write_text("# tampered\n", encoding="utf-8")
+    with pytest.raises(SnapshotError, match="does not match pinned commit"):
+        resolve_sn60_sandbox_source(
+            sandbox_root=str(root), benchmark_file=str(benchmark),
+            sandbox_commit=head, scorer_version="ScaBenchScorerV2",
+        )
+
+
+def test_the_vendored_tree_is_not_packaged_into_the_wheel() -> None:
+    """The lane is installed with ``uv run --with-editable``, so the STAGED SOURCE TREE is what
+    reaches sys.path and ``sandbox/`` is its sibling. Force-including the tree into the wheel looks
+    like a robustness win and is the opposite: to travel in a wheel it must sit inside
+    ``kata_sn60/``, and pip then byte-compiles the pinned tree on install -- every resulting
+    ``__pycache__/*.pyc`` is an unlisted file, so verification fails on every round of an installed
+    lane. Verified by actually installing such a wheel; 74 findings."""
+    import tomllib
+
+    config = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    wheel = config["tool"]["hatch"]["build"]["targets"]["wheel"]
+    assert wheel["packages"] == ["kata_sn60"]
+    assert "force-include" not in wheel, (
+        "force-including the sandbox makes pip byte-compile the pinned tree; see this test's reason"
+    )
+
+
+def test_the_vendored_tree_is_a_sibling_of_the_package() -> None:
+    """What the editable layout relies on: ``<parent of kata_sn60>/sandbox``. If the tree ever moves
+    inside the package this breaks loudly here rather than silently at deploy time."""
+    import kata_sn60
+
+    package_dir = Path(kata_sn60.__file__).resolve().parent
+    assert sandbox_snapshot.vendored_root() == (package_dir.parent / "sandbox").resolve()
+    assert (sandbox_snapshot.vendored_root() / sandbox_snapshot.MANIFEST_NAME).is_file()

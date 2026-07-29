@@ -507,7 +507,12 @@ def test_a_response_without_an_authoritative_usage_receipt_settles_the_worst_cas
 
     assert usage.calls == 1
     assert usage.output_tokens == 64
-    assert usage.upstream_errors == 1
+    # The point of every one of these bodies: a partial or absent receipt must NEVER be read as
+    # cheap. The proxy's flattened ``input_tokens``/``output_tokens`` default to zero, so the third
+    # case in particular would undercount real spend if they were trusted.
+    assert usage.unmetered_calls == 1
+    # Not an upstream failure: the call was answered, so the score it produced is complete.
+    assert usage.upstream_errors == 0
 
 
 def test_the_gateway_is_not_a_general_proxy() -> None:
@@ -625,3 +630,57 @@ def test_every_judge_env_var_is_deployable() -> None:
     for var in JUDGE_ENV.values():
         assert var.startswith("KATA_SN60_"), var  # the installer's per-subnet prefix rule
         assert not any(bad in var for bad in denied), var
+
+
+# --- an answered call with no usage receipt ------------------------------------------------------
+#
+# Charging it at the reservation is NOT negotiable: the proxy's flattened token fields default to
+# zero, so reading them would let a missing receipt look like "spent nothing". What these pin is
+# that being blind to the COST does not also mean discarding a complete SCORE.
+
+
+def test_a_missing_usage_receipt_is_charged_at_the_reservation() -> None:
+    def _opener(request, timeout=None):
+        return _FakeResponse(json.dumps({"choices": [{"message": {"content": "{}"}}]}).encode())
+
+    limits = JudgeBudgetLimits(max_calls=5, max_output_tokens_per_call=64)
+    with JudgeGateway(upstream_url="http://up", limits=limits, opener=_opener) as gw:
+        gw.register_scope("12345")
+        assert _post(gw.url, {"messages": []}, headers={"x-job-run-id": "12345"})[0] == 200
+        usage = gw.usage()
+
+    # Conservative on money: the full reservation, never the zero-default flattened fields.
+    assert usage.calls == 1
+    assert usage.output_tokens == 64
+    assert usage.input_tokens > 0
+    assert usage.unmetered_calls == 1
+    # Precise about completeness: the judge answered, so this is not an upstream failure.
+    assert usage.upstream_errors == 0
+
+
+def test_a_real_upstream_failure_is_still_an_upstream_error() -> None:
+    """The distinction only holds if the genuine failure keeps failing."""
+    def _opener(request, timeout=None):
+        raise TimeoutError("read timed out")
+
+    limits = JudgeBudgetLimits(max_calls=5, max_output_tokens_per_call=64)
+    with JudgeGateway(upstream_url="http://up", limits=limits, opener=_opener) as gw:
+        gw.register_scope("12345")
+        with pytest.raises(urllib.error.HTTPError):
+            _post(gw.url, {"messages": []}, headers={"x-job-run-id": "12345"})
+        usage = gw.usage()
+
+    assert usage.upstream_errors == 1
+    assert usage.unmetered_calls == 0
+    assert usage.output_tokens == 64  # charged identically
+
+
+def test_holds_still_in_flight_at_shutdown_are_upstream_errors() -> None:
+    """An abandoned call never answered, so it is indeterminate rather than merely unmetered."""
+    limits = JudgeBudgetLimits(max_calls=5, max_output_tokens_per_call=64)
+    meter = JudgeMeter(limits)
+    meter.reserve(request_chars=100, scope="12345")
+    meter.settle_all_holds_worst_case()
+    usage = meter.usage()
+    assert usage.upstream_errors == 1
+    assert usage.unmetered_calls == 0

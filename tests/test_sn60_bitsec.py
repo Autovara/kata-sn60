@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+from kata.core.tree_snapshot import SnapshotError
 
 from kata_sn60.sn60_bitsec import (
     DEFAULT_SANDBOX_COMMIT,
@@ -569,7 +570,7 @@ def test_resolve_sn60_sandbox_source_rejects_mismatched_pinned_commit(
     )
     assert source.sandbox_commit == head
 
-    with pytest.raises(ValueError, match="does not match the checked-out sandbox"):
+    with pytest.raises(SnapshotError, match=r"HEAD is .*, expected 0{40}"):
         resolve_sn60_sandbox_source(
             sandbox_root=str(sandbox_root),
             benchmark_file=str(benchmark_path),
@@ -1454,3 +1455,67 @@ def test_a_project_scored_after_the_deadline_is_refused_without_spawning_the_sco
 
     assert payload["status"] == "error"
     assert "deadline elapsed" in payload["error"]
+
+
+def test_a_judge_call_with_no_usage_receipt_does_not_fail_the_project(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The score is complete when the judge answered; only the accounting is blind. Charging the
+    reservation keeps the money conservative, and failing the round on top of that would discard
+    good paid work over a bookkeeping gap. Contrast with the upstream-failure test below."""
+    from kata_sn60.execution.judge_gateway import JudgeBudgetLimits, JudgeGateway
+
+    source = _gateway_source(tmp_path)
+    context = _make_context(tmp_path, source)
+    Path(context.report_path).parent.mkdir(parents=True, exist_ok=True)
+
+    def fake_run(cmd, *args, **kwargs):
+        # Stand in for a judge call that answered without a readable receipt.
+        scope = str(sn60_synthetic_ids(context).job_run_id)
+        gateway.meter.settle_worst_case(
+            gateway.meter.reserve(request_chars=100, scope=scope), upstream_error=False
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout='{"status": "success"}', stderr="")
+
+    monkeypatch.setenv("CHUTES_API_KEY", "scoring-key")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with JudgeGateway(
+        upstream_url="http://upstream:8087", limits=JudgeBudgetLimits(max_calls=10)
+    ) as gateway:
+        payload = build_default_evaluation_hook(
+            source, judge_gateway=gateway, scorer_runtime=_FakeScorerRuntime(tmp_path)
+        )(context, _NONEMPTY_REPORT)
+        usage = gateway.usage()
+
+    assert payload["status"] == "success"
+    assert usage.unmetered_calls == 1
+    assert usage.output_tokens > 0          # still charged
+
+
+def test_a_judge_upstream_failure_still_fails_the_project(tmp_path: Path, monkeypatch) -> None:
+    """The separation is only safe if the genuine failure keeps failing: an unanswered call means
+    findings went unchecked, which is a degraded score and must never be published."""
+    from kata_sn60.execution.judge_gateway import JudgeBudgetLimits, JudgeGateway
+
+    source = _gateway_source(tmp_path)
+    context = _make_context(tmp_path, source)
+    Path(context.report_path).parent.mkdir(parents=True, exist_ok=True)
+
+    def fake_run(cmd, *args, **kwargs):
+        scope = str(sn60_synthetic_ids(context).job_run_id)
+        gateway.meter.settle_worst_case(gateway.meter.reserve(request_chars=100, scope=scope))
+        return subprocess.CompletedProcess(cmd, 0, stdout='{"status": "success"}', stderr="")
+
+    monkeypatch.setenv("CHUTES_API_KEY", "scoring-key")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with JudgeGateway(
+        upstream_url="http://upstream:8087", limits=JudgeBudgetLimits(max_calls=10)
+    ) as gateway:
+        payload = build_default_evaluation_hook(
+            source, judge_gateway=gateway, scorer_runtime=_FakeScorerRuntime(tmp_path)
+        )(context, _NONEMPTY_REPORT)
+
+    assert payload["status"] == "error"
+    assert "upstream failure" in payload["error"]

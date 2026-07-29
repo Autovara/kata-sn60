@@ -22,8 +22,10 @@ from kata.state.lanes import (
     write_promotion_record,
 )
 
+from kata_sn60 import sandbox_snapshot
 from kata_sn60.execution.judge_gateway import JudgeGateway, judge_limits_from_env
 from kata_sn60.execution.policy import tee_execution_enabled
+from kata_sn60.execution.proxy_image import verify_proxy_image
 from kata_sn60.execution.scorer_runtime import ScorerRuntime
 from kata_sn60.sn60_bitsec import (
     DEFAULT_EVAL_MAX_VULNS,
@@ -334,6 +336,10 @@ class Sn60ChallengeResult:
     #: metered by ``kata_sn60.execution.judge_gateway``. ``None`` when the lane configured no
     #: judge budget, so the round ran unmetered.
     judge_usage: dict[str, object] | None = None
+    #: Which scoring-proxy image answered this challenge's judge calls, and whether it matched the
+    #: pin and the scorer revision. A score is only as attributable as the container that produced
+    #: it, so this rides with the result rather than living in an operator's memory.
+    proxy_image: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -353,6 +359,8 @@ class Sn60BaselineResult:
     #: Actual validator-paid judge usage. Mirrors ``Sn60ChallengeResult`` so the resident can
     #: settle a manually invoked baseline at measured cost instead of the worst-case reservation.
     judge_usage: dict[str, object] | None = None
+    #: Which scoring-proxy image answered, mirroring ``Sn60ChallengeResult`` for the same reason.
+    proxy_image: dict[str, object] | None = None
 
 
 def build_sn60_challenge_id() -> str:
@@ -515,6 +523,15 @@ def run_sn60_baseline_only(
     run_root = output_base / run_id
     run_root.mkdir(parents=True, exist_ok=False)
 
+    # The baseline spends the SAME validator-funded judge as a challenge, so it is held to the
+    # same proxy provenance. Skipped only when the caller injected its own evaluation hook, which
+    # means no real scorer (and so no real proxy) is involved at all.
+    proxy_provenance = None
+    if evaluation_hook is None:
+        proxy_provenance = verify_proxy_image(
+            expected_sandbox_commit=source.sandbox_commit,
+            expected_tree_sha256=sandbox_snapshot.tree_sha256_for(Path(source.sandbox_root)),
+        ).as_dict()
     with ExitStack() as stack:
         judge_gateway = None
         effective_evaluation_hook = evaluation_hook
@@ -579,6 +596,7 @@ def run_sn60_baseline_only(
         artifact_hash=baseline_hash,
         baseline=baseline_summary,
         judge_usage=judge_usage,
+        proxy_image=proxy_provenance,
     )
     write_sn60_baseline_summary(run_root / "baseline_summary.json", result)
     return result

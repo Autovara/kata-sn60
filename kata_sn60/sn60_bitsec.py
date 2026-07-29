@@ -442,13 +442,12 @@ def resolve_sn60_sandbox_source(
     # this change would have converted every published result's commit from a verified fact into
     # an unchecked assertion -- while looking like a pure relocation.
     if (resolved_sandbox_root / ".git").exists():
-        actual_commit = resolve_git_commit(resolved_sandbox_root)
-        if actual_commit != expected_commit:
-            raise ValueError(
-                "Pinned SN60 sandbox commit does not match the checked-out sandbox: "
-                f"pinned {expected_commit}, actual {actual_commit}."
-            )
-        resolved_commit = actual_commit
+        # A matching HEAD is NOT complete provenance: it says which commit is checked out, not that
+        # the working tree still IS that commit. Modified, missing, untracked and ignored files are
+        # each a refusal, mirroring the vendored tree's finding set.
+        resolved_commit = sandbox_snapshot.require_verified_clone(
+            resolved_sandbox_root, expected_commit=expected_commit
+        )
     elif sandbox_snapshot.is_vendored(resolved_sandbox_root):
         manifest = sandbox_snapshot.manifest(resolved_sandbox_root)
         manifest_commit = str(manifest.get("upstream_commit") or "")
@@ -1370,6 +1369,12 @@ def build_default_evaluation_hook(
                     ),
                     "result": {},
                 }
+            # An upstream failure means the judge never answered, so findings went unchecked and
+            # the score is incomplete -- the same reason a refusal fails. A call that answered
+            # without a readable usage receipt is NOT this: it is charged at its reservation (never
+            # at the proxy's flattened zero-default token fields, which would undercount real
+            # spend) and recorded as ``unmetered_calls``, but the score it produced is complete, so
+            # failing the round would discard good paid work over a bookkeeping gap.
             if upstream_errors > 0:
                 return {
                     "status": "error",
