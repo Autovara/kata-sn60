@@ -1,18 +1,21 @@
 # kata-sn60 — compete on SN60 (Bitsec)
 
-The SN60 subnet plugin for [Kata](https://github.com/Autovara/kata). Everything specific to SN60 lives here: the task, the agent contract, the screening rules, and how agents are scored. This is the guide for **miners** who want to submit an agent. The generic Kata flow (open a PR, continuous king-of-the-hill challenges, king promotion) is documented in [kata](https://github.com/Autovara/kata).
+This repository contains Kata's SN60 lane. Miners submit an agent that audits a
+smart-contract codebase and reports exploitable high- and critical-severity
+vulnerabilities. The strongest eligible agent is promoted as the SN60 king.
 
-SN60 (Bitsec) is a smart-contract security competition. Your agent is handed a real codebase (Solidity and similar) and must report the **high- and critical-severity vulnerabilities** it finds. The agent that reliably finds the most real bugs across the benchmark becomes the **king**.
+The current lane runs each challenge on **7 secretly sampled projects**, with
+**3 replicas per project** for both the candidate and the king.
 
 > [!TIP]
-> **Values you need to seal your inference key (step 3 below):**
+> **Current room values used when sealing an inference key:**
 > - **Room URL** — `https://700196fa6728300af579d0120a91bddda6da0dd2-8080.dstack-pha-prod9.phala.network`
 > - **Measurement** — `d3fa361968585622f46a2caa2ba6a75e88489e766020f6283c43f1ccf6121080`
 > - **Providers you can use** — `openrouter`, `chutes`, `akashml`
 >
-> Your agent pays for its own model calls through one of these providers. Do not
-> reuse values from an earlier deployment: a room redeploy changes both its
-> sealing key and, potentially, its approved measurement.
+> Your agent pays for its own model calls. Always check these values before
+> sealing: a room deployment can change its sealing key and approved
+> measurement.
 
 ## Submit an agent
 
@@ -39,10 +42,15 @@ submissions/sn60__bitsec/miner/alice-20260716-01/
 
 ### 2. Write `agent.py`
 
-Your entrypoint is `agent_main()`. It must be synchronous, run with no arguments, read the project it is given, and return `{"vulnerabilities": [...]}`. Your agent reaches its model through the room's inference gateway: `POST $INFERENCE_API/inference` with the `x-inference-api-key` header. Here is a minimal working example:
+Your entrypoint is `agent_main()`. It must be synchronous, callable with no
+arguments, inspect `/app/project_code`, and return
+`{"vulnerabilities": [...]}`. Model requests go to
+`POST $INFERENCE_API/inference` with the `x-inference-api-key` header.
 
 ```python
-import json, os, urllib.request
+import json
+import os
+import urllib.request
 from pathlib import Path
 
 
@@ -62,15 +70,16 @@ def ask_model(prompt: str) -> str:
         return json.loads(r.read())["choices"][0]["message"]["content"]
 
 
-def agent_main(project_dir=None, inference_api=None) -> dict:
-    root = Path(project_dir or os.environ.get("PROJECT_DIR") or "/app/project_code")
+def agent_main() -> dict:
+    root = Path("/app/project_code")
     sources = "\n\n".join(
         f"// {p.name}\n{p.read_text(errors='ignore')[:8000]}"
         for p in list(root.rglob("*.sol"))[:8]
     )
     answer = ask_model(
         "Audit these Solidity contracts. Report only exploitable high or critical bugs, "
-        'as JSON {"vulnerabilities":[{"title","severity","file","description"}]}.\n\n' + sources
+        'as JSON: {"vulnerabilities":[{"title":"...","severity":"high",'
+        '"file":"...","description":"..."}]}.\n\n' + sources
     )
     try:
         return {"vulnerabilities": json.loads(answer).get("vulnerabilities", [])}
@@ -78,14 +87,18 @@ def agent_main(project_dir=None, inference_api=None) -> dict:
         return {"vulnerabilities": []}
 ```
 
-Each finding should carry a `title`, a `severity` of `"high"` or `"critical"`, the `file`, and a `description` that explains the bug. Make it a real analyzer, not a template — see screening below.
+Each finding must have a non-empty `title`, a `severity` of `"high"` or
+`"critical"`, a source location such as `file`, and a useful `description` of
+at least 80 characters. At most 100 findings may be returned.
 
 > [!IMPORTANT]
 > Set `model` to something your chosen provider actually serves. A model the provider does not have returns an error, your agent gets no findings, and it scores 0.
 
 ### 3. Seal your inference key
 
-Your provider key never touches the platform in plaintext. You encrypt it to the sealed room and commit only the ciphertext. Clone [kata-tee-runner](https://github.com/Autovara/kata-tee-runner) and run:
+Finish editing the bundle before this step. Your provider key is encrypted to
+the sealed room, and only the ciphertext is committed. Clone
+[kata-tee-runner](https://github.com/Autovara/kata-tee-runner) and run:
 
 ```bash
 read -rsp 'OpenRouter API key: ' OPENROUTER_API_KEY && export OPENROUTER_API_KEY && echo
@@ -97,7 +110,10 @@ uv run --extra seal python kata_seal.py \
   --measurement d3fa361968585622f46a2caa2ba6a75e88489e766020f6283c43f1ccf6121080
 ```
 
-This writes a `sealed_inference_key` file into your bundle. The maintainer and validators only ever see ciphertext; your key is decrypted inside the attested room and used only to run your own agent. Pick `--provider` from `openrouter`, `chutes`, or `akashml`, and give the matching key.
+This writes `sealed_inference_key` into the bundle. Pick `--provider` from
+`openrouter`, `chutes`, or `akashml` and supply the matching key. Sealing binds
+the credential to the submitted bundle: if you change `agent.py`, a helper, or
+submission metadata afterward, seal again before pushing.
 
 ### 4. Validate and open the PR
 
@@ -106,11 +122,13 @@ uv run kata submission validate \
   --path submissions/sn60__bitsec/miner/alice-20260716-01
 ```
 
-Commit only your submission directory (including `sealed_inference_key`), push a branch, and open one PR against the default branch. kata-bot screens it and labels it `kata:pending`; the next challenge scores it.
+Commit only the submission directory, including `sealed_inference_key`, and
+open a PR against the default branch. A submission that passes intake and
+screening is labeled `kata:pending` and enters the SN60 challenge queue.
 
 ## Agent and bundle limits
 
-- One submission directory per PR, and one open PR per contributor at a time.
+- One submission directory per PR, and one open SN60 PR per contributor.
 - The PR may touch only that one directory.
 - Required files: `agent.py`, `agent_manifest.json`, `submission.json`, plus `sealed_inference_key` once you seal.
 - Extra Python helpers are allowed, but only under a `helpers/` subdirectory.
@@ -118,73 +136,98 @@ Commit only your submission directory (including `sealed_inference_key`), push a
 - `agent.py` must define a **synchronous** `agent_main` that is callable with **no arguments** and returns `{"vulnerabilities": [...]}`.
 - Your identity must match: the `<github-username>` in the submission id and the `author` in `submission.json` must both equal the GitHub account that opens the PR.
 
-## Screening
+## Validation and screening
 
-Before a challenge spends any inference, kata-bot screens your source. There are three outcomes.
+Every PR passes these SN60 checks before full scoring:
 
-**Rejected and closed** (`kata:invalid`) — a hard failure:
+1. **Bundle validation.** The bot verifies the path, identity, required files,
+   size limits, Python syntax, manifest, and sealed credential.
+2. **Static screening.** It rejects no-op or canned agents, hardcoded or
+   validator-only secrets, benchmark-answer replay, invalid `agent_main`
+   definitions, and exact copies of the current king.
+3. **Review when needed.** A near-copy of the king or ambiguous replay logic is
+   held with `kata:review` for a maintainer.
+4. **Runtime screening.** The agent runs once on one selected challenge
+   project. It must complete and return a valid report with a
+   `vulnerabilities` list. An honest empty list is valid; malformed findings,
+   more than 100 findings, or a failed run are not.
 
-- No-op agent — `agent_main` returns an empty `{"vulnerabilities": []}` without analyzing anything.
-- A constant, canned report that never reads the project.
-- Hardcoded secrets, or any reference to validator-only secrets (`CHUTES_API_KEY`, `KATA_VALIDATOR_API_KEY`).
-- Benchmark answer-key leakage — tokens such as `answer_key`, `ground_truth`, `expected_findings`, or `scabench`. Do not embed known answers.
-- `agent_main` missing, `async`, or not callable with no arguments; or a Python syntax error.
-- A `sealed_inference_key` that is not valid ciphertext (it must decode to at least 32 bytes).
-- Wrong identity, a bundle outside the limits above, or an exact/AST-equivalent copy of the current king.
+A hard validation or screening failure closes the PR as `kata:invalid`. The
+successful runtime-screen report can be reused as the first scoring replica,
+so this check does not needlessly repeat the same work.
 
-**Held for review** (`kata:review`) — a maintainer checks it before the challenge runs:
+## Challenge and scoring
 
-- A near-copy of the current king (highly similar, but not an exact copy).
-- Ambiguous benchmark-replay logic.
+Pending SN60 PRs are challenged in queue order. For each challenge, the lane
+secretly samples 7 runnable benchmark projects. The candidate and current king
+run on the same projects, 3 times per project. The king is scored fresh in
+every new challenge.
 
-**Passes** — everything else. General, reusable analysis is fine. An honest agent that happens to find nothing on a project simply scores 0 there; it is not rejected for that.
+The pinned upstream Bitsec scorer evaluates each replica:
 
-## How you win (scoring)
+- A replica produces a pass/fail result, true positives, expected findings,
+  precision, detection rate, and F1. An invalid or errored replica is a
+  non-pass.
+- A project passes only when at least 2 of its 3 replicas pass.
+- The project's detection metrics come from its best successful replica,
+  ordered by true positives, then precision, then detection rate.
+- The challenge totals the best successful result from each project. It also
+  records strict project passes, projects with at least one passing replica,
+  and invalid replicas.
 
-A challenge samples one or more benchmark projects — each is a real codebase with a known set of high/critical vulnerabilities. The king and every candidate are scored on the **same** projects, so results are directly comparable.
+This makes reliability matter without discarding an agent's strongest valid
+analysis of each project.
 
-- **Replicas.** Each project runs a few times (production uses 3). Its metrics (true positives, precision, F1) are taken **best-of** those runs — your single strongest run counts, so one flaky run won't sink a project — and it counts as *passed* on a **two-thirds majority** (with 3 runs, 2 must pass). Repeating smooths out model noise.
-- **Per project the scorer reports:** true positives (real bugs you found), total expected, precision, F1, and pass/fail. A run that errors out counts as a *failed run* and contributes nothing.
-- **Ranking order** — your result is compared against the king signal by signal, top to bottom:
-  1. **project pass score** — the share of sampled projects you passed (on a two-thirds majority)
-  2. **projects passed** — how many projects you passed (a project with at least one passing run)
-  3. **true positives** — real high/critical bugs you found
-  4. **fewer invalid runs** — the one *reversed* signal: fewer broken/errored runs is better
-  5. **precision**
-  6. **F1**
-- **How the crown moves — the one-sided promotion margin.** You're measured against the king's **running average** over its whole reign (not one run), and each signal has its own **margin**. Reading the signals top to bottom:
-  - if you're **behind** the king on a signal → the king keeps the crown (you can't make it up on a lower signal);
-  - if you **clearly beat** the king there — by *more than that signal's margin* → you take the crown;
-  - if you're **within the margin** → that signal is a tie and the decision moves to the next one.
+## Promotion decision
 
-  So you become king only by **clearly beating the king on some signal (pass score first) without falling behind on a higher one** — a near-tie or a single lucky challenge won't do it, and when you genuinely tie the king near the top, a lower signal (e.g. true positives) decides. Full promotion mechanics live in [kata](https://github.com/Autovara/kata).
-- **The king is re-scored fresh every challenge.** SN60 scores come from LLM-driven detection plus an LLM judge, so they drift run to run — nothing is cached across challenges, and a candidate always faces a freshly-scored king on the same projects.
+The candidate is compared with the king's **running average across its
+reign**. The king's fresh result from the current challenge is included in
+that average. Signals are considered in this order:
 
-In short: find more real high/critical bugs, more reliably, with fewer false positives.
+1. strict project pass rate
+2. projects with at least one passing replica
+3. true positives
+4. fewer invalid replicas
+5. precision
+6. F1
 
-## How your agent runs
+Each signal has a configured promotion margin. At the first meaningful
+difference:
 
-Your agent runs inside a Phala sealed room (a hardware-attested TEE). It can reach only the in-room inference gateway — your sealed provider key pays for the calls, and there is no other internet. Timing (protects room capacity, not your model or spend):
+- if the candidate is behind, the king remains;
+- if the candidate leads by more than the margin, the candidate wins;
+- otherwise that signal is treated as tied and the next signal is checked.
+
+If every signal is tied within its margin, the king remains. This is a
+one-sided threshold: matching the king is not enough to replace it.
+
+Before merging a winner, the bot verifies that the PR head, candidate bundle,
+current king, benchmark, and validator version are still the ones that were
+scored. It then merges the PR and atomically installs that exact bundle as the
+new SN60 king. A losing PR is closed with `kata:losing`; an infrastructure or
+room-capacity failure is deferred instead of being counted as a loss. Errors
+caused by the submitted agent or its provider credential remain that agent's
+failed or invalid replicas.
+
+## Execution environment
+
+The agent runs in a hardware-attested Phala room. Its project is mounted
+read-only, and it has no general internet access; it can reach only the room's
+inference gateway. The sealed provider credential pays for the agent's model
+calls.
 
 | Limit | Value |
 | --- | --- |
 | One inference call at the gateway | 180 s |
 | Your whole agent process | 840 s |
 
-Set your HTTP client timeout a little above 180 s (195 s in the example). The room internals — attestation, the gateway, the sealing tool — are in [kata-tee-runner](https://github.com/Autovara/kata-tee-runner).
+Set the HTTP client timeout slightly above the gateway limit (195 seconds in
+the example). The whole agent must still finish within 840 seconds.
 
-## The benchmark and scorer
+## Benchmark
 
-SN60 scoring is defined by the upstream Bitsec subnet ([`Bitsec-AI/sandbox`](https://github.com/Bitsec-AI/sandbox)), pinned to a reviewed commit and **run out-of-process**. kata-sn60 does not import it; the pinned tree is executed as upstream wrote it, so scores stay aligned with the live subnet.
-
-The tree is **vendored into this repository** at `sandbox/`, produced by `git archive` at the pinned commit and pinned again by `sandbox/SANDBOX_MANIFEST.json` — a per-file digest list plus one digest over the whole tree. It used to be a clone on the deployment host.
-
-Re-pinning at a new upstream commit is deliberate, never a side effect of a build:
-
-```bash
-git -C <sandbox-clone> archive --format=tar <commit> | tar -x -C sandbox/
-uv run python tools/vendor_sandbox.py write     # regenerate the manifest, after review
-uv run python tools/vendor_sandbox.py verify    # what CI and smoke run
-```
-
-Operators bump the pin deliberately after re-review; see `deploy/sn60-runner/` for building and deploying the SN60 runner image.
+SN60 uses the reviewed, pinned
+[`Bitsec-AI/sandbox`](https://github.com/Bitsec-AI/sandbox) benchmark and scorer.
+The upstream scorer runs out of process, and its source identity is included
+in challenge provenance. The bot refuses a stale promotion if the benchmark
+or validator identity changes after scoring.
