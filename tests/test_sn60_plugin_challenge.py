@@ -525,3 +525,70 @@ def test_the_published_result_records_which_proxy_answered(tmp_path: Path) -> No
         (Path(result.output_root) / "challenge_result.json").read_text(encoding="utf-8")
     )
     assert written["proxy_image"] == record
+
+
+# --- the board must say what is actually happening -----------------------------------------------
+
+
+def test_the_board_reports_the_screening_gate_instead_of_a_king_that_is_not_scoring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What made the gate look frozen. The writer opened with king ``scoring`` before anything was
+    scored, and published nothing during the gate -- so a room run that legitimately takes minutes
+    was indistinguishable from a hang, on a board asserting work that had not begun."""
+    from kata_sn60.progress import Sn60ChallengeProgress
+
+    path = tmp_path / "challenge-progress.json"
+    writer = Sn60ChallengeProgress(
+        run_id="r1", project_keys=["p"], candidate_labels=["cand-a"],
+        per_variant_total=21, progress_path=str(path),
+    )
+
+    opened = json.loads(path.read_text(encoding="utf-8"))
+    assert opened["stage"] == "screening"
+    assert opened["king"]["state"] == "pending"      # NOT "scoring"
+
+    writer.mark_screening("cand-a", started_at="2026-07-30T01:15:06+00:00", timeout_seconds=1020.0)
+    during = json.loads(path.read_text(encoding="utf-8"))
+    entry = during["candidates"][0]
+    assert during["stage"] == "screening"
+    assert entry["state"] == "screening"
+    # Elapsed-against-budget is the only honest progress: the gate is one room run with no ticks.
+    assert entry["screening_started_at"] == "2026-07-30T01:15:06+00:00"
+    assert entry["screening_timeout_seconds"] == 1020.0
+    assert during["king"]["state"] == "pending"
+
+    writer.mark_screening_passed("cand-a", finished_at="2026-07-30T01:22:00+00:00")
+    writer.mark_scoring_started()
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["stage"] == "scoring"
+    assert after["king"]["state"] == "scoring"       # true only now
+    assert after["candidates"][0]["state"] == "queued"
+
+
+def test_a_challenge_publishes_the_gate_then_scoring(tmp_path: Path) -> None:
+    """End to end through the real driver: the board passes through the screening stage and only
+    then reports scoring."""
+    sandbox_root, benchmark_path, king_root, specs, paths = _build_inputs(tmp_path)
+    execute, evaluate = _detection_hooks()
+    progress_path = tmp_path / "challenge-progress.json"
+
+    run_sn60_plugin_challenge(
+        king_artifact_path=str(king_root),
+        candidates=[("cand-a", paths["cand-a"])],
+        config={
+            "sandbox_root": str(sandbox_root), "benchmark_file": str(benchmark_path),
+            "sandbox_commit": "commit-gate", "project_keys": ["project-alpha"],
+            "replicas_per_project": 1,
+        },
+        output_root=str(tmp_path / "gate"),
+        plugin=Sn60BitsecPlugin(execution_hook=execute, evaluation_hook=evaluate),
+        progress_path=str(progress_path),
+    )
+
+    final = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert final["state"] == "completed"
+    # The gate is disabled in this configuration, so it is passed through rather than dwelt in --
+    # but the stage must still have advanced off "screening" rather than being left there.
+    assert final["stage"] == "scoring"
+    assert final["king"]["state"] == "done"

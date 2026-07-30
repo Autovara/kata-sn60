@@ -1173,3 +1173,69 @@ def test_rejects_duplicate_agent_main_decoy(tmp_path: Path) -> None:
     reasons = validate_sn60_static_screening(bundle_root)
 
     assert any("agent_main more than once" in reason for reason in reasons)
+
+
+# --- the gate must be BOUNDED, and its bound must be honest --------------------------------------
+
+
+def test_the_screening_execution_timeout_is_actually_enforced(monkeypatch) -> None:
+    """It used to be resolved, reported in the result as ``execution_timeout_seconds``, and never
+    applied -- the bound only ever reached the DEFAULT hook, and production passes a sealed-room
+    hook. So the gate advertised a budget while really being bounded by the room's HTTP timeout
+    times its retry count: up to 45 minutes in a gate that reports nothing. That is the freeze."""
+    import time
+
+    from kata_sn60.execution.errors import Sn60ExecutionInfrastructureError
+    from kata_sn60.validator_system.screening import _execute_within
+
+    def _never_returns(_context):
+        time.sleep(30)
+        raise AssertionError("should have been abandoned long before this")
+
+    started = time.monotonic()
+    with pytest.raises(Sn60ExecutionInfrastructureError, match="did not return within"):
+        _execute_within(_never_returns, object(), 0.2)
+    # Bounded by the budget, not by the hook finishing.
+    assert time.monotonic() - started < 5
+
+
+def test_a_screening_timeout_is_infrastructure_not_a_miner_failure() -> None:
+    """The room enforces its own agent lifetime, so a room behaving itself always answers first.
+    Giving up before it did says nothing about the candidate -- and the driver restores an
+    infrastructure error to pending rather than closing the PR invalid."""
+    from kata_sn60.execution.errors import Sn60ExecutionInfrastructureError
+    from kata_sn60.validator_system.screening import _execute_within
+
+    with pytest.raises(Sn60ExecutionInfrastructureError):
+        _execute_within(lambda _c: __import__("time").sleep(10), object(), 0.1)
+
+
+def test_the_hooks_own_result_and_errors_still_propagate() -> None:
+    from kata_sn60.validator_system.screening import _execute_within
+
+    assert _execute_within(lambda _c: {"success": True}, object(), 5) == {"success": True}
+    with pytest.raises(ValueError, match="boom"):
+        _execute_within(lambda _c: (_ for _ in ()).throw(ValueError("boom")), object(), 5)
+
+
+def test_the_budget_is_never_shorter_than_the_room_is_allowed_to_take(monkeypatch) -> None:
+    """The trap the deployed config was in: a 360s screening budget against a 900s room lifetime.
+    Harmless only while nothing enforced it; the moment it is enforced it expires on every
+    legitimate slow run. An explicit value is raised to the room's floor rather than obeyed."""
+    from kata_sn60.validator_system.screening import (
+        SCREENING_TIMEOUT_MARGIN_SECONDS,
+        resolve_sn60_screening_execution_timeout_seconds,
+    )
+
+    monkeypatch.setenv("KATA_SN60_ROOM_REQUEST_LIFETIME_SECONDS", "900")
+    floor = 900 + SCREENING_TIMEOUT_MARGIN_SECONDS
+
+    monkeypatch.setenv("KATA_SN60_SCREENING_EXECUTION_TIMEOUT_SECONDS", "360")
+    assert resolve_sn60_screening_execution_timeout_seconds() == floor
+
+    monkeypatch.delenv("KATA_SN60_SCREENING_EXECUTION_TIMEOUT_SECONDS")
+    assert resolve_sn60_screening_execution_timeout_seconds() == floor
+
+    # A deliberately LARGER budget is the operator's call and is kept.
+    monkeypatch.setenv("KATA_SN60_SCREENING_EXECUTION_TIMEOUT_SECONDS", "1800")
+    assert resolve_sn60_screening_execution_timeout_seconds() == 1800

@@ -34,6 +34,10 @@ SN60_SCREENING_STAGE_EXECUTION = "execution"
 SN60_SCREENING_MAX_FINDINGS = 100
 SN60_SCREENING_MIN_DESCRIPTION_CHARS = 80
 SN60_SCREENING_TIMEOUT_ENV = "KATA_SN60_SCREENING_EXECUTION_TIMEOUT_SECONDS"
+#: Headroom over the room's own agent lifetime: transport, attestation and report upload all
+#: happen after the agent's clock stops, so the client must allow for them or it will give up on
+#: runs the room was about to answer.
+SCREENING_TIMEOUT_MARGIN_SECONDS = 120
 DEFAULT_SN60_SCREENING_EXECUTION_TIMEOUT_SECONDS = 5 * 60
 VALID_SCREENING_SEVERITIES = {"critical", "high"}
 SOURCE_LOCATION_PATTERN = re.compile(
@@ -198,7 +202,7 @@ def run_sn60_screening(
     timeout_seconds = resolve_sn60_screening_execution_timeout_seconds()
     execute = execution_hook or build_default_screening_execution_hook(sandbox_source)
     try:
-        report_payload = execute(context)
+        report_payload = _execute_within(execute, context, timeout_seconds)
     except Sn60ExecutionInfrastructureError:
         # There is no attested candidate result to screen.  Let the challenge driver restore the
         # PR to pending; converting this exception into a failed report would blame the miner for
@@ -272,16 +276,85 @@ def build_default_screening_execution_hook(source: Sn60SandboxSource) -> Sn60Scr
     )
 
 
+def _execute_within(execute, context, timeout_seconds: float):
+    """Run the screening execution hook under a WALL-CLOCK bound.
+
+    ``KATA_SN60_SCREENING_EXECUTION_TIMEOUT_SECONDS`` used to be resolved, written into the
+    screening result as ``execution_timeout_seconds``, and never enforced: the bound only ever
+    applied inside the default hook, and production passes a sealed-room hook instead. So the gate
+    advertised a 6-minute budget while actually being bounded by the room's HTTP timeout times its
+    retry count -- up to 45 minutes of a round spent in a gate that reports no progress. That is
+    the "stuck at screening" an operator sees.
+
+    A DAEMON thread, deliberately. The hook is a blocking HTTP call with no cancellation, so the
+    only way to stop waiting is to stop waiting; the call itself is left to expire against its own
+    socket timeout. A ``ThreadPoolExecutor`` would be wrong here -- its worker threads are
+    non-daemon and its atexit hook joins them, so a wedged room would block the whole process from
+    exiting, converting a bounded gate back into an unbounded one at shutdown.
+
+    Expiry is an INFRASTRUCTURE error, not a screening failure. The room enforces its own agent
+    lifetime, so a room that is behaving always answers first; if we gave up before it did, the
+    delay is ours or the room's and blaming the miner would close a PR that did nothing wrong.
+    """
+    import threading
+
+    outcome: dict[str, object] = {}
+
+    def _run() -> None:
+        try:
+            outcome["value"] = execute(context)
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the calling thread below
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=_run, daemon=True, name="sn60-screening-execution")
+    worker.start()
+    worker.join(timeout_seconds)
+    if worker.is_alive():
+        raise Sn60ExecutionInfrastructureError(
+            f"SN60 screening execution did not return within {timeout_seconds:g}s "
+            f"({SN60_SCREENING_TIMEOUT_ENV}); the sealed room did not answer in time."
+        )
+    error = outcome.get("error")
+    if error is not None:
+        raise error
+    return outcome.get("value")
+
+
 def resolve_sn60_screening_execution_timeout_seconds() -> float:
+    """The wall-clock budget for one screening execution, never shorter than the room needs.
+
+    Now that this bound is ENFORCED rather than merely reported, a value below the room's own
+    ``KATA_SN60_ROOM_REQUEST_LIFETIME_SECONDS`` is not a tighter policy -- it is a guarantee of
+    false expiry, because the room is entitled to use that whole lifetime before it answers. The
+    deployed pair was exactly that trap: a 360s screening budget against a 900s room lifetime,
+    harmless only for as long as nothing enforced it.
+
+    So an explicit setting is raised to the room's floor rather than obeyed blindly, and the
+    default is derived from the same floor instead of being a fixed number that silently goes stale
+    the next time the lifetime changes.
+    """
+    floor = _room_lifetime_floor_seconds()
     value = os.environ.get(SN60_SCREENING_TIMEOUT_ENV)
     if value and value.strip():
         try:
             parsed = float(value.strip())
         except ValueError:
-            return DEFAULT_SN60_SCREENING_EXECUTION_TIMEOUT_SECONDS
+            return floor
         if parsed > 0:
-            return parsed
-    return DEFAULT_SN60_SCREENING_EXECUTION_TIMEOUT_SECONDS
+            return max(parsed, floor)
+    return floor
+
+
+def _room_lifetime_floor_seconds() -> float:
+    """Room agent lifetime plus transport margin; the shortest honest screening budget."""
+    raw = (os.environ.get("KATA_SN60_ROOM_REQUEST_LIFETIME_SECONDS") or "").strip()
+    try:
+        lifetime = float(raw) if raw else 0.0
+    except ValueError:
+        lifetime = 0.0
+    if lifetime <= 0:
+        return float(DEFAULT_SN60_SCREENING_EXECUTION_TIMEOUT_SECONDS)
+    return lifetime + SCREENING_TIMEOUT_MARGIN_SECONDS
 
 
 def validate_sn60_screening_report(

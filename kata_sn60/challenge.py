@@ -9,6 +9,7 @@ drop-in for the legacy ``run_sn60_challenge``.
 
 from __future__ import annotations
 
+import logging
 from contextlib import ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -42,12 +43,15 @@ from kata_sn60.validator_system.challenge import (
 )
 from kata_sn60.validator_system.screening import (
     load_passed_screening_report,
+    resolve_sn60_screening_execution_timeout_seconds,
     screening_result_payload,
 )
 
 from .challenge_inputs import validate_challenge_candidates
 from .plugin import Sn60BitsecPlugin, Sn60Problems
 from .progress import Sn60ChallengeProgress
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _duel_challenge_summary_for(
@@ -256,14 +260,47 @@ def run_sn60_plugin_challenge(
     screener_run_ids: dict[str, str] = {}
     screened_labels: set[str] = set()
     for label, agent_path in candidates:
-        screening = run_optional_sn60_screener_project(
-            candidate_artifact_path=agent_path,
-            project_keys=problems.project_keys,
-            output_root=str(challenge_root / label / "screening"),
-            sandbox_source=problems.sandbox_source,
-            execution_hook=execution_hook,
+        # The gate is ONE sealed-room agent run with no intermediate ticks, and it can legitimately
+        # take many minutes. Announcing entry and exit -- to the log and to the board -- is what
+        # separates "a slow room run is in progress" from "the round has hung", which were
+        # previously indistinguishable to anyone watching.
+        gate_budget = resolve_sn60_screening_execution_timeout_seconds()
+        gate_started = datetime.now(UTC)
+        if writer is not None:
+            writer.mark_screening(
+                label,
+                started_at=gate_started.isoformat(),
+                timeout_seconds=gate_budget,
+            )
+        LOGGER.info(
+            "[sn60] screening gate: %s entering (budget %.0fs)", label, gate_budget
+        )
+        try:
+            screening = run_optional_sn60_screener_project(
+                candidate_artifact_path=agent_path,
+                project_keys=problems.project_keys,
+                output_root=str(challenge_root / label / "screening"),
+                sandbox_source=problems.sandbox_source,
+                execution_hook=execution_hook,
+            )
+        except BaseException:
+            LOGGER.warning(
+                "[sn60] screening gate: %s did not complete after %.0fs",
+                label,
+                (datetime.now(UTC) - gate_started).total_seconds(),
+            )
+            raise
+        gate_elapsed = (datetime.now(UTC) - gate_started).total_seconds()
+        LOGGER.info(
+            "[sn60] screening gate: %s -> %s in %.0fs",
+            label,
+            "skipped (gate disabled)" if screening is None
+            else ("passed" if screening.passed else "FAILED"),
+            gate_elapsed,
         )
         if screening is None:
+            if writer is not None:
+                writer.mark_screening_passed(label, finished_at=datetime.now(UTC).isoformat())
             qualified.append((label, agent_path))
             continue
         payload = screening_result_payload(screening)
@@ -276,6 +313,8 @@ def run_sn60_plugin_challenge(
                 screened_execution_payloads[label] = {
                     (screening.project_key, 1): load_passed_screening_report(screening)
                 }
+            if writer is not None:
+                writer.mark_screening_passed(label, finished_at=datetime.now(UTC).isoformat())
             qualified.append((label, agent_path))
             continue
         candidate_root = Path(agent_path).expanduser().resolve()
@@ -301,6 +340,8 @@ def run_sn60_plugin_challenge(
 
     # Lazy king: only score the king when a candidate qualified, so a challenge where
     # everyone is screened out never runs (or reports) the king.
+    if writer is not None and qualified:
+        writer.mark_scoring_started()
     score_king_effective = bool(qualified)
     scoring_problems = replace(problems, screened_execution_payloads=screened_execution_payloads)
 

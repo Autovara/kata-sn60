@@ -40,10 +40,17 @@ class Sn60ChallengeProgress:
             "run_id": run_id,
             "competition_mode": "king_duel",
             "project_keys": list(project_keys),
+            # The challenge-time screening gate runs BEFORE anything is scored, so the board needs
+            # a stage of its own for it. Without one the writer opened with the king already
+            # "scoring", which was untrue for the whole gate -- and since nothing updates during
+            # the gate, an operator watching a room run that legitimately takes minutes saw a
+            # frozen board claiming work that had not started. "Stuck at screening" was that.
+            "stage": "screening",
             "king": {
                 "done": 0,
                 "total": per_variant_total,
-                "state": "scoring",
+                # Not "scoring": the king is untouched until every candidate clears the gate.
+                "state": "pending",
             },
             "candidates": [
                 {
@@ -79,6 +86,38 @@ class Sn60ChallengeProgress:
         for key, value in update.metrics.items():
             if key not in _STRUCTURAL_KEYS:
                 target[key] = value
+        self._write()
+
+    def mark_screening(self, label: str, *, started_at: str, timeout_seconds: float) -> None:
+        """This candidate is IN the one-time screening gate right now.
+
+        Published with the budget and the start time so the board can render "screening, 4m of
+        17m" rather than a bar that has not moved. The gate is a single sealed-room agent run with
+        no intermediate ticks, so elapsed-against-budget is the only honest progress there is.
+        """
+        entry = self._by_label.get(label)
+        if entry is None:
+            return
+        self._progress["stage"] = "screening"
+        entry["state"] = "screening"
+        entry["screening_started_at"] = started_at
+        entry["screening_timeout_seconds"] = timeout_seconds
+        self._write()
+
+    def mark_screening_passed(self, label: str, *, finished_at: str) -> None:
+        """The candidate cleared the gate; scoring is what happens next."""
+        entry = self._by_label.get(label)
+        if entry is None:
+            return
+        entry["state"] = "queued"
+        entry["screening_finished_at"] = finished_at
+        self._write()
+
+    def mark_scoring_started(self) -> None:
+        """Every candidate has cleared the gate, so the king really is being scored now."""
+        self._progress["stage"] = "scoring"
+        if self._progress["king"].get("state") == "pending":
+            self._progress["king"]["state"] = "scoring"
         self._write()
 
     def mark_screened_out(self, label: str, *, screening_result: dict, snapshot: dict) -> None:
