@@ -30,6 +30,17 @@ from room.profile import (
     resolve_agent_execution_timeout_seconds,
 )
 
+#: The unprivileged uid/gid the miner's agent container runs as.
+#:
+#: Three places must agree on this: the ``--user`` the agent is started with, the ownership of the
+#: output volume it writes its report into, and the ownership of its writable ``/tmp``. They are
+#: derived from these constants rather than repeated as literals because a mismatch does not fail
+#: loudly -- the agent simply cannot write, the report is never produced, and the run is reported
+#: as an agent that "completed without writing report.json".
+AGENT_UID = 65532
+AGENT_GID = 65532
+
+
 FIXTURE_AGENT = "/app/fixture_agent.py"
 
 
@@ -192,8 +203,11 @@ class Sn60TeeProfile:
         The Docker daemon cannot see paths created inside the runner container, and ``docker cp``
         cannot modify a container whose root filesystem is read-only. The verified bundle therefore
         enters a daemon-managed volume through a staging container that is CREATED AND NEVER
-        STARTED, then that volume is mounted read-only into the final agent. A size-limited tmpfs
-        volume stays mounted by the same staging container until the report is copied out,
+        STARTED, then that volume is mounted read-only into the final agent. The report comes back
+        the same way, through a PLAIN local volume the staging container can read after the agent
+        exits -- it must not be a tmpfs one, because a tmpfs volume is private to each container
+        that mounts it, so the agent's report died with the agent and the copy below always found
+        an empty directory,
         preserving the report without giving the untrusted agent an unbounded writable disk.
 
         The staging container exists because ``docker cp`` addresses a CONTAINER, never a volume,
@@ -257,24 +271,48 @@ class Sn60TeeProfile:
                     raise RuntimeError(
                         f"create bundle volume failed: {_docker_error(created_bundle_volume)}"
                     )
-                created_output_volume = docker(
-                    [
-                        "volume",
-                        "create",
-                        "--driver",
-                        "local",
-                        "--opt",
-                        "type=tmpfs",
-                        "--opt",
-                        "device=tmpfs",
-                        "--opt",
-                        "o=size=4m,uid=65532,gid=65532,mode=700",
-                        output_volume,
-                    ]
-                )
+                # A PLAIN local volume, deliberately not a tmpfs one.
+                #
+                # A tmpfs-backed volume is NOT shared between containers: every container that
+                # mounts it gets its own empty tmpfs, discarded when that container exits. The
+                # agent therefore wrote its report into storage that died with it, and the
+                # ``docker cp`` below -- which reads the STAGING container's mount -- saw an empty
+                # directory every time. The failure is silent and total: the agent runs, spends the
+                # miner's inference budget, returns a valid report, and the run is reported as
+                # "completed without writing report.json. Agent exit: 0". Every submission failed
+                # this way regardless of its code or the project it was given.
+                #
+                # The volume is removed in the cleanup below, so the report still does not outlive
+                # the job; what changes is only that the two containers now see the same bytes.
+                created_output_volume = docker(["volume", "create", output_volume])
                 if created_output_volume.returncode != 0:
                     raise RuntimeError(
                         f"create output volume failed: {_docker_error(created_output_volume)}"
+                    )
+                # Docker creates a fresh volume root-owned and 0755, and the agent runs unprivileged
+                # as AGENT_UID -- without this it cannot write the report at all. Done in a throwaway
+                # root container because only root may chown, and the agent must not be given that.
+                chowned = docker(
+                    [
+                        "run",
+                        "--rm",
+                        "--user",
+                        "0:0",
+                        "--network",
+                        "none",
+                        "--log-driver",
+                        "none",
+                        "--mount",
+                        f"type=volume,source={output_volume},target=/kata_output",
+                        image,
+                        "chown",
+                        f"{AGENT_UID}:{AGENT_GID}",
+                        "/kata_output",
+                    ]
+                )
+                if chowned.returncode != 0:
+                    raise RuntimeError(
+                        f"prepare output volume failed: {_docker_error(chowned)}"
                     )
 
                 create_staging = docker(
@@ -339,7 +377,7 @@ class Sn60TeeProfile:
                         "--security-opt",
                         "no-new-privileges",
                         "--user",
-                        "65532:65532",
+                        f"{AGENT_UID}:{AGENT_GID}",
                         *env_args,
                         "--memory",
                         "512m",
@@ -350,7 +388,7 @@ class Sn60TeeProfile:
                         "--log-driver",
                         "none",
                         "--tmpfs",
-                        "/tmp:rw,noexec,nosuid,size=64m,uid=65532,gid=65532,mode=700",
+                        f"/tmp:rw,noexec,nosuid,size=64m,uid={AGENT_UID},gid={AGENT_GID},mode=700",
                         "--mount",
                         f"type=volume,source={bundle_volume},target={cp_dst},readonly",
                         "--mount",
