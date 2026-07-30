@@ -29,7 +29,7 @@
     "KATA_SN60_SCORER_RUNTIME_ROOT": "/srv/kata/sn60-scorer-runtime"
   },
   "unit_params": {
-    "timeout_start_sec": 5400,
+    "timeout_start_sec": 10800,
     "round_gap_sec": 180,
     "requires_docker": true
   },
