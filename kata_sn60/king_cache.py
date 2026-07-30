@@ -34,6 +34,18 @@ def benchmark_version_key(scorer_version: str, benchmark_sha256: str) -> str:
     return f"{scorer_version}@{benchmark_sha256}"
 
 
+
+def _is_recorded_run(entry: object) -> bool:
+    """Whether a scoreboard slot holds a real recorded run rather than a gap.
+
+    ``None`` is the marker this code writes for a gap. The empty-dict form is recognised too,
+    because scoreboards written before that fix are still on disk and resuming one must not replay
+    its placeholders as results.
+    """
+    if not isinstance(entry, dict):
+        return False
+    return bool(entry.get("report")) or bool(entry.get("evaluation"))
+
 @dataclass
 class KingScoreboard:
     """Cached king runs for one ``(king_hash, benchmark_version)``.
@@ -48,11 +60,25 @@ class KingScoreboard:
     scores: dict[str, list[dict[str, object]]] = field(default_factory=dict)
 
     def cached_run(self, project_key: str, replica_index: int) -> dict[str, object] | None:
-        """Return the cached run for a 1-based replica index, or ``None``."""
+        """Return the cached run for a 1-based replica index, or ``None``.
+
+        A GAP is a miss, not a hit. ``record_run`` has to lengthen the list when replicas finish
+        out of order -- which they routinely do, since ``KATA_SN60_PROJECT_CONCURRENCY`` runs three
+        at once -- and the slots it skips over are placeholders standing in for work that has not
+        happened yet. Returning one as though it were a cached result told the caller "this replica
+        is already done" and handed it an empty payload.
+
+        The cost was silent and paid: the replica had already made its sealed-room call, so the
+        report existed and the money was spent, but its evaluation was replaced with ``{}`` and the
+        run was counted invalid. Which replicas lost depended purely on completion order.
+        """
         runs = self.scores.get(project_key)
         if runs is None or replica_index < 1 or replica_index > len(runs):
             return None
-        return runs[replica_index - 1]
+        entry = runs[replica_index - 1]
+        if not _is_recorded_run(entry):
+            return None
+        return entry
 
     def record_run(
         self,
@@ -70,9 +96,12 @@ class KingScoreboard:
         if replica_index - 1 < len(runs):
             runs[replica_index - 1] = entry
         else:
-            # Replicas are recorded in order; pad defensively if a gap appears.
+            # Replicas finish OUT OF ORDER under concurrency, so a later index can be recorded
+            # first and the list has to be lengthened past the ones still running. ``None`` marks
+            # those as "not yet recorded" -- an empty dict looked like a real cached run and was
+            # served as one, discarding the still-running replica's result. See ``cached_run``.
             while len(runs) < replica_index - 1:
-                runs.append({"report": {}, "evaluation": {}})
+                runs.append(None)
             runs.append(entry)
 
 
