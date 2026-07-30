@@ -61,8 +61,27 @@ PROJECT_CONCURRENCY_ENV_NAME = "KATA_SN60_PROJECT_CONCURRENCY"
 DEFAULT_PROJECT_CONCURRENCY = 3
 ATTESTED_CREDENTIAL_FAILURE_KEY = "_kata_attested_credential_failure"
 ATTESTED_CREDENTIAL_FAILURE_STATUS = "credential_failure"
+#: Credential failures the room reports inside an ATTESTED report: the run happened, the quote
+#: verified, and the room is telling us why the contestant's key was unusable.
 ATTESTED_CREDENTIAL_FAILURE_REASONS = frozenset(
     {"absent", "unreadable", "not_bound_to_bundle"}
+)
+#: The room cannot attest a key it could not decrypt -- it never got far enough to run anything, so
+#: there is no quote and no report, only an HTTP 400. That USED to abort the whole round as
+#: infrastructure, which meant one contestant's unusable key stopped the competition for everyone.
+#: A key the room cannot decrypt is a property of that contestant's submission, so it scores zero
+#: for that side and the round carries on.
+UNATTESTED_CREDENTIAL_FAILURE_REASON = "undecryptable"
+CREDENTIAL_FAILURE_REASONS = ATTESTED_CREDENTIAL_FAILURE_REASONS | {
+    UNATTESTED_CREDENTIAL_FAILURE_REASON
+}
+#: Only a 400 counts, and only with one of these in the body. A 5xx or a transport error is the
+#: ROOM failing, not the key, and must still abort rather than silently zero a contestant who did
+#: nothing wrong -- the distinction is the whole reason this is a narrow match and not "any
+#: rejection mentioning credentials".
+_ROOM_UNDECRYPTABLE_MARKERS = (
+    "credential could not be decrypted",
+    "inference key could not be decrypted",
 )
 
 
@@ -1109,10 +1128,27 @@ def build_tee_room_execution_hook(source: Sn60SandboxSource) -> Sn60ExecutionHoo
             seen_nonces=seen_nonces,
         )
         if not outcome.accepted:
-            # A rejection before an attested report exists is not evidence about the candidate.
-            # It covers room HTTP failures, exhausted transport retries, invalid/missing quotes,
-            # an unapproved measurement, and a broken room protocol.  Abort the challenge so the
-            # competition driver preserves the entrant instead of manufacturing an invalid score.
+            # ONE rejection is evidence about the contestant: a sealed key the room cannot
+            # decrypt. Nothing about the room is wrong there -- it read a key that does not open,
+            # which is a property of that submission -- so it scores zero for this side and the
+            # round continues instead of the whole competition stopping for one bad key.
+            if room_undecryptable_credential(outcome.reason):
+                return {
+                    "success": False,
+                    "error": (
+                        "sealed inference credential failure "
+                        f"({UNATTESTED_CREDENTIAL_FAILURE_REASON}): {outcome.reason}"
+                    ),
+                    "report": {"vulnerabilities": []},
+                    ATTESTED_CREDENTIAL_FAILURE_KEY: {
+                        "reason": UNATTESTED_CREDENTIAL_FAILURE_REASON,
+                        "detail": str(outcome.reason or ""),
+                    },
+                }
+            # Every OTHER rejection is not evidence about the candidate. It covers room HTTP
+            # failures, exhausted transport retries, invalid/missing quotes, an unapproved
+            # measurement, and a broken room protocol.  Abort the challenge so the competition
+            # driver preserves the entrant instead of manufacturing an invalid score.
             raise Sn60ExecutionInfrastructureError(
                 f"sealed-room run rejected: {outcome.reason}"
             )
@@ -1229,16 +1265,35 @@ def report_finding_count(report_payload: dict[str, object]) -> int:
     return 0
 
 
+def room_undecryptable_credential(reason: object) -> bool:
+    """Whether a room rejection means "this contestant's sealed key does not open".
+
+    Deliberately narrow. The room answers a bad key with an HTTP 400 and says so; anything else --
+    a 5xx, a transport failure, an unapproved measurement, a missing quote -- is the ROOM failing,
+    and zeroing a contestant for that would punish them for an outage they had no part in. So both
+    halves must match: the 400 AND the message. A broad "mentions credentials" match would turn
+    every room-side wobble into a zero, which is the failure mode worth being paranoid about.
+    """
+    text = str(reason or "").lower()
+    if "http 400" not in text:
+        return False
+    return any(marker in text for marker in _ROOM_UNDECRYPTABLE_MARKERS)
+
+
 def attested_credential_failure(
     report_payload: dict[str, object],
 ) -> dict[str, str] | None:
-    """Return credential-failure metadata added only after TEE quote verification."""
+    """Credential-failure metadata for a run that scores ZERO rather than aborting the round.
+
+    Covers both shapes: the room's attested ``credential_failure`` report, and the unattested
+    HTTP 400 for a key it could not decrypt (where no quote can exist, because nothing ran).
+    """
 
     failure = report_payload.get(ATTESTED_CREDENTIAL_FAILURE_KEY)
     if not isinstance(failure, dict):
         return None
     reason = str(failure.get("reason") or "")
-    if reason not in ATTESTED_CREDENTIAL_FAILURE_REASONS:
+    if reason not in CREDENTIAL_FAILURE_REASONS:
         return None
     return {
         "reason": reason,

@@ -1659,3 +1659,71 @@ def test_a_judge_upstream_failure_still_fails_the_project(tmp_path: Path, monkey
 
     assert payload["status"] == "error"
     assert "upstream failure" in payload["error"]
+
+
+# --- one unusable key must not stop the competition ----------------------------------------------
+
+
+def test_a_key_the_room_cannot_decrypt_scores_zero_instead_of_aborting() -> None:
+    """The live failure: the king's sealed key was sealed to an older room key, the room answered
+    HTTP 400, and the WHOLE round aborted -- so one contestant's unusable key stopped the
+    competition for everyone. A key that does not open is a property of that submission, so it
+    scores zero for that side and the round carries on."""
+    from kata_sn60.sn60_bitsec import (
+        ATTESTED_CREDENTIAL_FAILURE_KEY,
+        UNATTESTED_CREDENTIAL_FAILURE_REASON,
+        attested_credential_failure,
+        report_finding_count,
+        room_undecryptable_credential,
+    )
+
+    reason = (
+        'room run failed: room HTTP 400: '
+        '{"error":"sealed miner credential could not be decrypted"}'
+    )
+    assert room_undecryptable_credential(reason) is True
+
+    payload = {
+        "success": False,
+        "report": {"vulnerabilities": []},
+        ATTESTED_CREDENTIAL_FAILURE_KEY: {
+            "reason": UNATTESTED_CREDENTIAL_FAILURE_REASON,
+            "detail": reason,
+        },
+    }
+    failure = attested_credential_failure(payload)
+    assert failure is not None
+    assert failure["reason"] == UNATTESTED_CREDENTIAL_FAILURE_REASON
+    # Zero, not an error: no findings, so no true positives.
+    assert report_finding_count(payload) == 0
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        'room run failed: room HTTP 503: {"error":"upstream unavailable"}',
+        "room run failed: transport error after 3 attempts",
+        "room quote verification failed: unapproved measurement",
+        'room run failed: room HTTP 500: '
+        '{"error":"sealed miner credential could not be decrypted"}',
+        "",
+    ],
+)
+def test_a_room_side_failure_still_aborts_rather_than_zeroing_a_contestant(reason: str) -> None:
+    """The boundary that makes the above safe. Zeroing on anything but a 400-with-message would
+    punish a contestant for an outage they had no part in -- and a room-wide fault would then zero
+    every entrant at once. Note the 500 case: same message, still an abort, because a server error
+    is the room failing rather than the key being bad."""
+    from kata_sn60.sn60_bitsec import room_undecryptable_credential
+
+    assert room_undecryptable_credential(reason) is False
+
+
+def test_an_unknown_credential_reason_is_not_silently_scored_as_zero() -> None:
+    """The marker is validator-reserved and the reason set is closed, so a forged or unrecognised
+    reason cannot turn into a free zero-score path."""
+    from kata_sn60.sn60_bitsec import ATTESTED_CREDENTIAL_FAILURE_KEY, attested_credential_failure
+
+    assert attested_credential_failure(
+        {ATTESTED_CREDENTIAL_FAILURE_KEY: {"reason": "made-up", "detail": "x"}}
+    ) is None
