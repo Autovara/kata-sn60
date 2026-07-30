@@ -107,7 +107,7 @@ uv run --extra seal python kata_seal.py \
   --provider openrouter \
   --key-env OPENROUTER_API_KEY \
   --bundle submissions/sn60__bitsec/miner/alice-20260716-01 \
-  --measurement 9a508edf9b8f9c8a8d5c877ce3d05bf97306a3d9a447838e3ab498327625e33e
+  --measurement bdee3d6418e2e38f2d150eda4f2d74faff18ca35424891d0bc6859197a9d52a5
 ```
 
 This writes `sealed_inference_key` into the bundle. Pick `--provider` from
