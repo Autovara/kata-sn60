@@ -1727,3 +1727,77 @@ def test_an_unknown_credential_reason_is_not_silently_scored_as_zero() -> None:
     assert attested_credential_failure(
         {ATTESTED_CREDENTIAL_FAILURE_KEY: {"reason": "made-up", "detail": "x"}}
     ) is None
+
+
+# --- an invalid replica is scored exactly like a failed one --------------------------------------
+
+
+def _zero_or_scored_replica(
+    index: int, *, status: str, detection: float, result: str | None
+) -> Sn60ReplicaResult:
+    return Sn60ReplicaResult(
+        project_key="p", replica_index=index, report_path="", evaluation_path="",
+        execution_success=(status == "success"), evaluation_status=status, score=detection,
+        detection_rate=detection, result=result, true_positives=1 if detection else 0,
+        total_expected=2, total_found=1 if detection else 0, precision=detection,
+        f1_score=detection,
+    )
+
+
+def test_an_invalid_replica_scores_zero_and_stays_in_the_denominator() -> None:
+    """Invalid runs used to be dropped from the average, so a variant was rated only on the
+    replicas that survived: one usable answer out of three reported as 0.6 rather than 0.2. That
+    made an invalid run strictly BETTER for a contestant than a run that completed and found
+    nothing -- the opposite of what a failure should be worth."""
+    failed = summarize_project(project_key="p", replica_results=[
+        _zero_or_scored_replica(1, status="success", detection=0.6, result="FAIL"),
+        _zero_or_scored_replica(2, status="success", detection=0.0, result="FAIL"),
+        _zero_or_scored_replica(3, status="success", detection=0.0, result="FAIL"),
+    ])
+    invalid = summarize_project(project_key="p", replica_results=[
+        _zero_or_scored_replica(1, status="success", detection=0.6, result="FAIL"),
+        _zero_or_scored_replica(2, status="error", detection=0.0, result=None),
+        _zero_or_scored_replica(3, status="error", detection=0.0, result=None),
+    ])
+
+    # Same shape of outcome, same score. That is the whole rule.
+    assert invalid.average_detection_rate == failed.average_detection_rate == pytest.approx(0.2)
+    assert invalid.invalid_runs == 2 and failed.invalid_runs == 0
+
+
+def test_the_pass_denominator_counts_invalid_replicas() -> None:
+    """2-of-3 stays 2-of-3 rather than quietly relaxing to 2-of-2 when a replica is invalid."""
+    two_of_three = summarize_project(project_key="p", replica_results=[
+        _zero_or_scored_replica(1, status="success", detection=1.0, result="PASS"),
+        _zero_or_scored_replica(2, status="success", detection=1.0, result="PASS"),
+        _zero_or_scored_replica(3, status="error", detection=0.0, result=None),
+    ])
+    assert two_of_three.passed is True          # 2 of 3
+
+    one_of_three = summarize_project(project_key="p", replica_results=[
+        _zero_or_scored_replica(1, status="success", detection=1.0, result="PASS"),
+        _zero_or_scored_replica(2, status="error", detection=0.0, result=None),
+        _zero_or_scored_replica(3, status="error", detection=0.0, result=None),
+    ])
+    # Excluding invalids would make this 1-of-1 and therefore a pass. It is 1 of 3.
+    assert one_of_three.passed is False
+
+
+def test_a_project_keeps_its_best_attempt_despite_the_zeros() -> None:
+    """The zeros belong in the AVERAGE, not in best-of: a project is still credited with the best
+    answer it produced, or an invalid replica would erase a genuine finding."""
+    aggregate = summarize_project(project_key="p", replica_results=[
+        _zero_or_scored_replica(1, status="success", detection=1.0, result="PASS"),
+        _zero_or_scored_replica(2, status="error", detection=0.0, result=None),
+    ])
+    assert aggregate.true_positives == 1
+    assert aggregate.average_detection_rate == pytest.approx(0.5)   # 1.0 and 0.0
+
+
+def test_every_replica_invalid_scores_zero_rather_than_dividing_by_nothing() -> None:
+    aggregate = summarize_project(project_key="p", replica_results=[
+        _zero_or_scored_replica(1, status="error", detection=0.0, result=None),
+        _zero_or_scored_replica(2, status="error", detection=0.0, result=None),
+    ])
+    assert aggregate.average_detection_rate == 0.0
+    assert aggregate.passed is False

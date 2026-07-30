@@ -272,13 +272,15 @@ def sn60_pass_score(summary: Sn60VariantSummary) -> float:
 
 
 def project_pass_threshold_label(replicas_per_project: int) -> str:
-    """The NOMINAL project-pass threshold, for display only.
+    """The project-pass threshold, for display.
 
-    This is the bar when every replica succeeds. The effective rule
-    (``project_passes``) is a >=2/3 majority of the SUCCESSFUL replicas: invalid
-    (infra-failed) runs are excluded from the denominator, so with a flaked
-    replica the real bar can be e.g. 2-of-2 rather than this nominal 2-of-3. It is
-    a challenge-level policy summary and does not vary per project.
+    A >=2/3 majority of ALL the project's replicas. The denominator is every replica, so an
+    invalid one counts against the bar exactly like a replica that ran and failed: 2-of-3 stays
+    2-of-3 rather than quietly relaxing to 2-of-2.
+
+    This docstring previously claimed the opposite -- that invalid runs were excluded from the
+    denominator -- which contradicted ``project_passes`` and is worth naming, because a comment
+    that misdescribes a scoring rule is read as the rule.
     """
     if replicas_per_project <= 0:
         return "invalid"

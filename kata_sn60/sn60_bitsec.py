@@ -673,10 +673,15 @@ def summarize_variant(
     successful = [
         result for result in replica_results if result.evaluation_status == "success"
     ]
-    detection_rates = [result.detection_rate for result in successful]
-    # Sum the per-project best-of aggregates (not the raw replicas): invalid
-    # replicas are already excluded inside summarize_project, so a variant that
-    # flaked a replica is never deflated on true_positives / found / expected.
+    # Same rule as summarize_project: an invalid replica is a failed one, so it contributes a zero
+    # to the average rather than vanishing from it.
+    detection_rates = [
+        result.detection_rate if result.evaluation_status == "success" else 0.0
+        for result in replica_results
+    ]
+    # Sum the per-project best-of aggregates (not the raw replicas). Best-of is unaffected by the
+    # rule above -- a zero can never be the maximum -- so a project keeps the score of its best
+    # attempt while the per-replica average reflects how many attempts actually produced one.
     true_positives = sum(project.true_positives for project in project_summaries)
     total_expected = sum(project.total_expected for project in project_summaries)
     total_found = sum(project.total_found for project in project_summaries)
@@ -720,7 +725,17 @@ def summarize_project(
     successful = [
         result for result in replica_results if result.evaluation_status == "success"
     ]
-    detection_rates = [result.detection_rate for result in successful]
+    # An INVALID replica is scored exactly like a FAILED one: zero, and still in the denominator.
+    #
+    # It used to be dropped from the average entirely, so a variant was rated only on the replicas
+    # that survived -- three replicas of which two were invalid reported the score of the one that
+    # worked. That reads as "this agent scores 0.6" when what happened is "this agent produced one
+    # usable answer out of three", and it made an invalid run strictly better for a contestant than
+    # a run that completed and found nothing.
+    detection_rates = [
+        result.detection_rate if result.evaluation_status == "success" else 0.0
+        for result in replica_results
+    ]
     pass_count = sum(1 for result in successful if result.result == "PASS")
     if successful:
         # Best-of: a project's score is that of its best successful replica, so an
