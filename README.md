@@ -10,7 +10,7 @@ The current lane runs each challenge on **7 secretly sampled projects**, with
 > [!TIP]
 > **Current room values used when sealing an inference key:**
 > - **Room URL** — `https://700196fa6728300af579d0120a91bddda6da0dd2-8080.dstack-pha-prod9.phala.network`
-> - **Measurement** — `9a508edf9b8f9c8a8d5c877ce3d05bf97306a3d9a447838e3ab498327625e33e`
+> - **Measurement** — `bdee3d6418e2e38f2d150eda4f2d74faff18ca35424891d0bc6859197a9d52a5`
 > - **Providers you can use** — `openrouter`, `chutes`, `akashml`
 >
 > Your agent pays for its own model calls. Always check these values before
