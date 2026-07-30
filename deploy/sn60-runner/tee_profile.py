@@ -24,6 +24,7 @@ from room.inference_network import (
     start_inference_gateway_once,
 )
 from room.profile import (
+    CREDENTIAL_FAILURE_ATTESTED_ZERO,
     MinerInferenceCredential,
     TeeJobResult,
     resolve_agent_execution_timeout_seconds,
@@ -98,6 +99,10 @@ def _agent_failure(*, image: str, job_id: str, error: str) -> TeeJobResult:
 
 class Sn60TeeProfile:
     fixture_project = "fixture-project"
+    # The single provider key is supplied and funded by each contestant. A missing, stale, or
+    # undecryptable ciphertext is therefore quote-bound evidence for a zero score, not a room
+    # infrastructure failure that aborts the duel.
+    credential_failure_mode = CREDENTIAL_FAILURE_ATTESTED_ZERO
 
     def image(self, project_key: str) -> str:
         """Return a deployer-approved, immutable private problem image."""

@@ -59,6 +59,11 @@ DEFAULT_EVALUATION_SUBPROCESS_TIMEOUT_SECONDS = 60 * 60
 # inference proxy / OpenRouter modest; raise via KATA_SN60_PROJECT_CONCURRENCY.
 PROJECT_CONCURRENCY_ENV_NAME = "KATA_SN60_PROJECT_CONCURRENCY"
 DEFAULT_PROJECT_CONCURRENCY = 3
+ATTESTED_CREDENTIAL_FAILURE_KEY = "_kata_attested_credential_failure"
+ATTESTED_CREDENTIAL_FAILURE_STATUS = "credential_failure"
+ATTESTED_CREDENTIAL_FAILURE_REASONS = frozenset(
+    {"absent", "unreadable", "not_bound_to_bundle"}
+)
 
 
 @dataclass(frozen=True)
@@ -1117,9 +1122,38 @@ def build_tee_room_execution_hook(source: Sn60SandboxSource) -> Sn60ExecutionHoo
             # miner's provider key returned all 402 => out of credits). Reserved key; scoring
             # ignores it.
             summary = (outcome.provenance or {}).get("inference_summary")
+            provenance_profile = str((outcome.provenance or {}).get("profile") or "")
+            reason = str(outcome.report.get("reason") or "")
+            if (
+                outcome.report.get("status") == ATTESTED_CREDENTIAL_FAILURE_STATUS
+                and provenance_profile == "credential_failure"
+                and reason in ATTESTED_CREDENTIAL_FAILURE_REASONS
+            ):
+                payload: dict[str, object] = {
+                    "success": False,
+                    "error": (
+                        "sealed inference credential failure "
+                        f"({reason}): {str(outcome.report.get('detail') or '')}"
+                    ).rstrip(": "),
+                    "report": {"vulnerabilities": []},
+                    ATTESTED_CREDENTIAL_FAILURE_KEY: {
+                        "reason": reason,
+                        "detail": str(outcome.report.get("detail") or ""),
+                    },
+                }
+                if isinstance(summary, dict):
+                    payload["_kata_inference_summary"] = summary
+                return payload
+            # An agent controls ordinary report keys. Never let it forge the validator-reserved
+            # marker that distinguishes room evidence from agent output.
+            sanitized = {
+                key: value
+                for key, value in outcome.report.items()
+                if key != ATTESTED_CREDENTIAL_FAILURE_KEY
+            }
             if isinstance(summary, dict):
-                return {**outcome.report, "_kata_inference_summary": summary}
-            return outcome.report
+                return {**sanitized, "_kata_inference_summary": summary}
+            return sanitized
         return {"success": False, "error": "sealed-room report was not a JSON object."}
 
     return _execute
@@ -1195,6 +1229,23 @@ def report_finding_count(report_payload: dict[str, object]) -> int:
     return 0
 
 
+def attested_credential_failure(
+    report_payload: dict[str, object],
+) -> dict[str, str] | None:
+    """Return credential-failure metadata added only after TEE quote verification."""
+
+    failure = report_payload.get(ATTESTED_CREDENTIAL_FAILURE_KEY)
+    if not isinstance(failure, dict):
+        return None
+    reason = str(failure.get("reason") or "")
+    if reason not in ATTESTED_CREDENTIAL_FAILURE_REASONS:
+        return None
+    return {
+        "reason": reason,
+        "detail": str(failure.get("detail") or "sealed inference credential could not be used"),
+    }
+
+
 def build_default_evaluation_hook(
     source: Sn60SandboxSource,
     *,
@@ -1222,6 +1273,28 @@ def build_default_evaluation_hook(
         context: Sn60ReplicaContext,
         report_payload: dict[str, object],
     ) -> dict[str, object]:
+        credential_failure = attested_credential_failure(report_payload)
+        if credential_failure is not None:
+            # A participant-owned fault proven by the room's quote is a valid zero, not an invalid
+            # infrastructure run, and it requires no judge/provider call.
+            return {
+                "status": "success",
+                "result": {
+                    "project": context.project_key,
+                    "detection_rate": 0.0,
+                    "true_positives": 0,
+                    "total_expected": sn60_benchmark_expected_count(
+                        source, context.project_key
+                    ),
+                    "total_found": 0,
+                    "precision": 0.0,
+                    "f1_score": 0.0,
+                    "result": (
+                        "sealed inference credential failure "
+                        f"({credential_failure['reason']}); scored zero"
+                    ),
+                },
+            }
         if bool(report_payload.get("infrastructure_error")):
             return {
                 "status": "error",

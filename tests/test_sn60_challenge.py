@@ -428,6 +428,90 @@ def test_run_sn60_challenge_ranks_candidates_and_picks_strict_winner(tmp_path: P
     assert summary_path.name == "challenge_summary.json"
 
 
+@pytest.mark.parametrize(
+    ("faulted_side", "expected_winner"),
+    [("king", "candidate"), ("candidate", None)],
+)
+def test_credential_failure_scores_only_that_side_zero_and_duel_completes(
+    tmp_path: Path,
+    faulted_side: str,
+    expected_winner: str | None,
+) -> None:
+    from kata_sn60.sn60_bitsec import (
+        ATTESTED_CREDENTIAL_FAILURE_KEY,
+        attested_credential_failure,
+    )
+
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = write_sandbox_source(sandbox_root)
+    king_root = tmp_path / "king"
+    candidate_root = tmp_path / "candidate"
+    _write_detection_bundle(king_root, 1.0)
+    _write_detection_bundle(candidate_root, 1.0)
+    ran: list[str] = []
+
+    def execute(context: Sn60ReplicaContext) -> dict[str, object]:
+        ran.append(context.variant_name)
+        if context.variant_name == faulted_side:
+            return {
+                "success": False,
+                "error": "sealed inference credential failure (unreadable)",
+                "report": {"vulnerabilities": []},
+                ATTESTED_CREDENTIAL_FAILURE_KEY: {
+                    "reason": "unreadable",
+                    "detail": "sealed miner credential could not be decrypted",
+                },
+            }
+        return {
+            "success": True,
+            "report": {
+                "vulnerabilities": [{"title": "valid finding"}],
+                "detection": 1.0,
+            },
+        }
+
+    def evaluate(
+        context: Sn60ReplicaContext, report: dict[str, object]
+    ) -> dict[str, object]:
+        failure = attested_credential_failure(report)
+        detection = 0.0 if failure is not None else 1.0
+        return {
+            "status": "success",
+            "result": {
+                "result": "FAIL" if failure is not None else "PASS",
+                "detection_rate": detection,
+                "true_positives": int(detection),
+                "total_expected": 1,
+                "total_found": int(detection),
+                "precision": detection,
+                "f1_score": detection,
+            },
+        }
+
+    result = _run_challenge(
+        king_artifact_path=str(king_root),
+        candidates=[("candidate", str(candidate_root))],
+        project_keys=["project-alpha"],
+        output_root=str(tmp_path / "runs"),
+        replicas_per_project=1,
+        sandbox_root=str(sandbox_root),
+        benchmark_file=str(benchmark_path),
+        sandbox_commit=f"commit-{faulted_side}-credential-zero",
+        execution_hook=execute,
+        evaluation_hook=evaluate,
+    )
+
+    assert ran == ["king", "candidate"]
+    assert result.winner_submission_id == expected_winner
+    assert result.king.aggregated_score == (0.0 if faulted_side == "king" else 1.0)
+    entry = result.entries[0]
+    assert entry.candidate.aggregated_score == (
+        0.0 if faulted_side == "candidate" else 1.0
+    )
+    assert entry.candidate.invalid_runs == 0
+    assert result.king.invalid_runs == 0
+
+
 def test_run_sn60_challenge_optional_screener_skips_failed_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

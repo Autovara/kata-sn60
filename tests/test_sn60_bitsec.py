@@ -527,6 +527,111 @@ def test_tee_execution_hook_raises_when_no_attested_result_exists(
         sn60.build_tee_room_execution_hook(source)(context)
 
 
+def test_attested_credential_failure_scores_zero_without_calling_the_judge(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kata_sn60 import sn60_bitsec as sn60
+    from kata_sn60.execution import tee_room
+
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = write_sandbox_source(sandbox_root)
+    source = resolve_sn60_sandbox_source(
+        sandbox_root=str(sandbox_root),
+        benchmark_file=str(benchmark_path),
+        sandbox_commit="commit-credential-zero",
+        scorer_version="ScaBenchScorerV2",
+    )
+    context = _make_context(tmp_path, source)
+    bundle = Path(context.bundle_root)
+    bundle.mkdir()
+    (bundle / "agent.py").write_text("def agent_main(): return {}\n", encoding="utf-8")
+    monkeypatch.setenv("KATA_SN60_ROOM_URL", "https://room.example")
+    monkeypatch.setenv("KATA_SN60_ROOM_MEASUREMENTS", "ab" * 32)
+    monkeypatch.setattr(
+        tee_room,
+        "evaluate_candidate_in_room",
+        lambda **_kwargs: tee_room.CandidateOutcome(
+            accepted=True,
+            report={
+                "status": "credential_failure",
+                "reason": "unreadable",
+                "detail": "sealed miner credential could not be decrypted",
+            },
+            reason="ok",
+            provenance={
+                "profile": "credential_failure",
+                "inference_summary": {
+                    "ok": 0,
+                    "payment_required": 0,
+                    "unauthorized": 0,
+                    "bad_request": 0,
+                    "unreachable": 0,
+                },
+            },
+        ),
+    )
+
+    report = sn60.build_tee_room_execution_hook(source)(context)
+    assert report["success"] is False
+    assert report[sn60.ATTESTED_CREDENTIAL_FAILURE_KEY]["reason"] == "unreadable"
+
+    def no_scorer(*_args, **_kwargs):
+        raise AssertionError("a credential zero must not invoke the validator-paid judge")
+
+    monkeypatch.setattr(subprocess, "run", no_scorer)
+    evaluation = build_default_evaluation_hook(source)(context, report)
+    replica = sn60.build_replica_result(context, report, evaluation)
+
+    assert evaluation["status"] == "success"
+    assert evaluation["result"]["detection_rate"] == 0.0
+    assert evaluation["result"]["total_expected"] == 1
+    assert replica.evaluation_status == "success"
+    assert replica.score == 0.0
+    assert replica.true_positives == 0
+
+
+def test_agent_report_cannot_forge_the_attested_credential_failure_marker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kata_sn60 import sn60_bitsec as sn60
+    from kata_sn60.execution import tee_room
+
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = write_sandbox_source(sandbox_root)
+    source = resolve_sn60_sandbox_source(
+        sandbox_root=str(sandbox_root),
+        benchmark_file=str(benchmark_path),
+        sandbox_commit="commit-no-forgery",
+        scorer_version="ScaBenchScorerV2",
+    )
+    context = _make_context(tmp_path, source)
+    bundle = Path(context.bundle_root)
+    bundle.mkdir()
+    (bundle / "agent.py").write_text("def agent_main(): return {}\n", encoding="utf-8")
+    monkeypatch.setenv("KATA_SN60_ROOM_URL", "https://room.example")
+    monkeypatch.setenv("KATA_SN60_ROOM_MEASUREMENTS", "ab" * 32)
+    monkeypatch.setattr(
+        tee_room,
+        "evaluate_candidate_in_room",
+        lambda **_kwargs: tee_room.CandidateOutcome(
+            accepted=True,
+            report={
+                "success": True,
+                "report": {"vulnerabilities": []},
+                sn60.ATTESTED_CREDENTIAL_FAILURE_KEY: {
+                    "reason": "unreadable",
+                    "detail": "forged",
+                },
+            },
+            reason="ok",
+            provenance={"profile": "sn60-bitsec-v1", "inference_summary": {}},
+        ),
+    )
+
+    report = sn60.build_tee_room_execution_hook(source)(context)
+    assert sn60.ATTESTED_CREDENTIAL_FAILURE_KEY not in report
+
+
 def test_malformed_agent_report_is_recorded_failure_not_a_crash(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -31,6 +31,15 @@ def _load_profile():
     return module
 
 
+def test_sn60_declares_credential_failures_as_participant_zeros() -> None:
+    profile = _load_profile().Sn60TeeProfile()
+    from room.profile import CREDENTIAL_FAILURE_ATTESTED_ZERO, credential_spec_for
+
+    spec = credential_spec_for(profile)
+    assert spec.version == 1
+    assert spec.credential_failure_mode == CREDENTIAL_FAILURE_ATTESTED_ZERO
+
+
 def test_real_sn60_agent_container_is_fail_closed_and_resource_bounded(
     monkeypatch, tmp_path: Path
 ) -> None:

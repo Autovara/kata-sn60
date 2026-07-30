@@ -180,7 +180,9 @@ Every PR passes these SN60 checks before full scoring:
 4. **Runtime screening.** The agent runs once on one selected challenge
    project. It must complete and return a valid report with a
    `vulnerabilities` list. An honest empty list is valid; malformed findings,
-   more than 100 findings, or a failed run are not.
+   more than 100 findings, or an agent execution failure are not. A
+   quote-verified missing, stale, or undecryptable participant credential
+   passes screening as a zero-scored run so it cannot stop the duel.
 
 A hard validation or screening failure closes the PR as `kata:invalid`. The
 successful runtime-screen report can be reused as the first scoring replica,
@@ -235,9 +237,10 @@ Before merging a winner, the bot verifies that the PR head, candidate bundle,
 current king, benchmark, and validator version are still the ones that were
 scored. It then merges the PR and atomically installs that exact bundle as the
 new SN60 king. A losing PR is closed with `kata:losing`; an infrastructure or
-room-capacity failure is deferred instead of being counted as a loss. Errors
-caused by the submitted agent or its provider credential remain that agent's
-failed or invalid replicas.
+room-capacity failure is deferred instead of being counted as a loss. A
+missing, stale, or undecryptable sealed credential is the affected
+participant's fault: the room returns quote-bound evidence, that side receives
+a valid score of zero, and the other side and remaining replicas continue.
 
 ## Execution environment
 

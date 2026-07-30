@@ -19,6 +19,7 @@ from kata_sn60.execution.policy import tee_execution_enabled
 from kata_sn60.sn60_bitsec import (
     Sn60ReplicaContext,
     Sn60SandboxSource,
+    attested_credential_failure,
     build_default_execution_hook,
     hash_bundle_root,
     stage_bundle,
@@ -288,6 +289,10 @@ def validate_sn60_screening_report(
     *,
     require_findings: bool = True,
 ) -> list[str]:
+    # A quote-bound participant credential failure is a valid zero, not infrastructure and not a
+    # reason to prevent the duel. The scoring path can safely reuse this attested report.
+    if attested_credential_failure(report_payload) is not None:
+        return []
     reasons: list[str] = []
     if not report_payload.get("success"):
         reasons.append(

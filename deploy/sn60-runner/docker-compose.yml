@@ -2,7 +2,7 @@ services:
   kata-sn60-runner:
     # Public security policy is literal in this manifest so Phala's compose measurement commits to
     # the exact runner, project images, provider routes, and execution bounds.
-    image: ghcr.io/autovara/kata-sn60-runner@sha256:1019643932462708923608a32761d49069d93b57f3152a93413463929983d90d
+    image: ghcr.io/autovara/kata-sn60-runner@sha256:d14501a5624c112b58d810220d92614e49baf4219465e6f2bbcfe79d57af9a9a
     ports:
       # Phala exposes this port through its HTTPS gateway so the external validator can reach the
       # room. /health and /pubkey are public; /run requires a signed, short-lived HMAC request.

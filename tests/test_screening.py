@@ -919,6 +919,41 @@ def test_run_sn60_screening_propagates_infrastructure_failure(tmp_path: Path) ->
         )
 
 
+def test_attested_credential_failure_does_not_block_the_duel(tmp_path: Path) -> None:
+    from kata_sn60.sn60_bitsec import ATTESTED_CREDENTIAL_FAILURE_KEY
+
+    sandbox_root = tmp_path / "sandbox"
+    benchmark_path = write_sandbox_source(sandbox_root)
+    source = resolve_sn60_sandbox_source(
+        sandbox_root=str(sandbox_root),
+        benchmark_file=str(benchmark_path),
+        sandbox_commit="commit-credential-zero",
+        scorer_version="ScaBenchScorerV2",
+    )
+    bundle_root = tmp_path / "candidate"
+    write_bundle(bundle_root, VALID_AGENT_SOURCE)
+
+    result = run_sn60_screening(
+        candidate_artifact_path=str(bundle_root),
+        project_key="project-alpha",
+        output_root=str(tmp_path / "runs"),
+        sandbox_source=source,
+        execution_hook=lambda _context: {
+            "success": False,
+            "error": "sealed inference credential failure (unreadable)",
+            "report": {"vulnerabilities": []},
+            ATTESTED_CREDENTIAL_FAILURE_KEY: {
+                "reason": "unreadable",
+                "detail": "sealed miner credential could not be decrypted",
+            },
+        },
+        run_static_checks=False,
+    )
+
+    assert result.passed
+    assert result.reasons == []
+
+
 def test_validate_sn60_static_screening_rejects_expanded_leak_tokens(
     tmp_path: Path,
 ) -> None:

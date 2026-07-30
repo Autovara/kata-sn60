@@ -75,8 +75,9 @@ covers the submission files other than the ciphertext itself, so a validator can
 ciphertext with a substituted agent to reveal the key. The miner commits only the ciphertext as
 `sealed_inference_key`; the owner and validator never receive the plaintext API key or provider
 descriptor. The initial public baseline has no ciphertext because it intentionally makes no funded
-inference calls; an agent without a ciphertext receives empty inference settings, never a platform
-key. The gateway rejects an inference request without a miner key before it can reach any provider.
+inference calls. For scored participants, a missing, stale, undecryptable, or bundle-mismatched
+ciphertext produces a quote-bound credential-failure report; the validator scores only that
+participant zero and continues the duel. The room never falls back to a platform key.
 
 `/run` accepts only signed, short-lived, one-time requests. Its quote binds the report, candidate
 bundle hash, profile/image/inference-policy provenance, project, and nonce. `POST /pull-test` is disabled by
