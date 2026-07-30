@@ -191,10 +191,20 @@ class Sn60TeeProfile:
 
         The Docker daemon cannot see paths created inside the runner container, and ``docker cp``
         cannot modify a container whose root filesystem is read-only. The verified bundle therefore
-        enters a daemon-managed volume through a stopped staging container, then that volume is
-        mounted read-only into the final agent. A size-limited tmpfs volume stays mounted by the
-        staging container until the report is copied out, preserving the report without giving the
-        untrusted agent an unbounded writable disk.
+        enters a daemon-managed volume through a staging container that is CREATED AND NEVER
+        STARTED, then that volume is mounted read-only into the final agent. A size-limited tmpfs
+        volume stays mounted by the same staging container until the report is copied out,
+        preserving the report without giving the untrusted agent an unbounded writable disk.
+
+        The staging container exists because ``docker cp`` addresses a CONTAINER, never a volume,
+        and neither copy can go through the agent itself: its bundle mount is ``readonly`` so the
+        agent cannot rewrite the bundle it is judged on, and reading the report back out of a
+        filesystem the untrusted agent controlled would follow whatever it left at that path.
+
+        It is never started, so the room runs exactly ONE process per replica. A ``created``
+        container has no pid and no memory -- it is a daemon-side record holding two volume
+        references -- and it does not appear in ``docker ps``. With ``PROJECT_CONCURRENCY=3`` the
+        VM therefore shows four running services: three agents and the runner.
         """
         ghcr_login()
         image = self.image(project_key)
@@ -290,11 +300,22 @@ class Sn60TeeProfile:
                         f"type=volume,source={bundle_volume},target={cp_dst}",
                         "--mount",
                         f"type=volume,source={output_volume},target=/kata_output",
+                        # NEVER STARTED. This container is a handle on the two volumes, not a
+                        # workload: ``docker cp`` only ever addresses a container, so something has
+                        # to hold the volumes for the bundle to go in and the report to come out.
+                        # Both copies work against a container in ``created`` state, so starting it
+                        # bought nothing and cost a process per replica -- with concurrency 3 that
+                        # was three ``sleep 86400`` processes, and three extra rows in
+                        # ``docker ps``, for work that was already done.
+                        #
+                        # The command is a no-op that exits immediately rather than a long sleep:
+                        # if anything ever does start this container by accident, it should stop
+                        # being a container, not become a day-long sleeper.
                         "--entrypoint",
                         "python",
                         image,
                         "-c",
-                        "import time; time.sleep(86400)",
+                        "pass",
                     ]
                 )
                 if create_staging.returncode != 0:
@@ -304,11 +325,6 @@ class Sn60TeeProfile:
                 cp_in = docker(["cp", f"{cp_src}/.", f"{staging}:{cp_dst}"])
                 if cp_in.returncode != 0:
                     raise RuntimeError(f"cp agent in failed: {_docker_error(cp_in)}")
-                start_staging = docker(["start", staging])
-                if start_staging.returncode != 0:
-                    raise RuntimeError(
-                        f"start staging container failed: {_docker_error(start_staging)}"
-                    )
 
                 create = docker(
                     [

@@ -227,3 +227,100 @@ def test_docker_copy_failure_remains_infrastructure_error(monkeypatch, tmp_path:
             job_id="01" * 16,
             bundle_sha256="cd" * 32,
         )
+
+
+def _capture_docker_calls(monkeypatch, tmp_path: Path) -> list[list[str]]:
+    """Run one real profile job against a fake daemon and return every docker command issued."""
+    profile_module = _load_profile()
+    digest = "ab" * 32
+    project = "project-a"
+    image = f"ghcr.io/bitsec-ai/{project}@sha256:{digest}"
+    monkeypatch.setenv(
+        "KATA_SN60_TEE_IMAGE_DIGESTS_JSON", json.dumps({project: f"sha256:{digest}"})
+    )
+    monkeypatch.setattr(profile_module, "ghcr_login", lambda: None)
+    monkeypatch.setattr(profile_module, "start_inference_gateway_once", lambda: None)
+    monkeypatch.setattr(profile_module, "ensure_inference_network_once", lambda: None)
+
+    calls: list[list[str]] = []
+
+    class Completed:
+        def __init__(self, *, stdout: str = ""):
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_docker(args, **_kwargs):
+        command = list(args)
+        calls.append(command)
+        if command[0] == "cp" and ":/kata_output/report.json" in command[1]:
+            Path(command[2]).write_text('{"vulnerabilities":[]}', encoding="utf-8")
+        if command[0] == "inspect":
+            return Completed(stdout=image)
+        return Completed()
+
+    monkeypatch.setattr(profile_module, "docker", fake_docker)
+    bundle = tmp_path / "submission"
+    bundle.mkdir()
+    (bundle / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    profile_module.Sn60TeeProfile().run(
+        project_key=project, credential=None, bundle_root=str(bundle),
+        job_id="01" * 16, bundle_sha256="cd" * 32,
+    )
+    return calls
+
+
+def test_the_staging_container_is_never_started(monkeypatch, tmp_path: Path) -> None:
+    """The staging container is a HANDLE on the two volumes, not a workload.
+
+    ``docker cp`` addresses a container and never a volume, so something has to hold the bundle and
+    report volumes -- but both copies work against a container in ``created`` state. Starting it
+    bought nothing and cost one ``sleep 86400`` process per replica, so at PROJECT_CONCURRENCY=3
+    the VM showed seven running services where the design calls for four.
+    """
+    calls = _capture_docker_calls(monkeypatch, tmp_path)
+    started = [command[1] for command in calls if command[0] == "start"]
+    staged = [
+        command[command.index("--name") + 1]
+        for command in calls
+        if command[0] == "create" and "--name" in command
+    ]
+    staging_names = [name for name in staged if name.endswith("-stage")]
+    assert staging_names, "the staging container should still be created"
+    # Exactly ONE process per replica: the agent. The staging container is not among them.
+    assert len(started) == 1
+    assert staging_names[0] not in started
+
+
+def test_the_staging_container_still_carries_both_volumes(monkeypatch, tmp_path: Path) -> None:
+    """Not started is not the same as not needed: it must still hold the bundle volume writable
+    (the agent mounts it readonly) and the report volume (the agent's filesystem is not a safe
+    place to read the report back from)."""
+    calls = _capture_docker_calls(monkeypatch, tmp_path)
+    staging = next(
+        command for command in calls
+        if command[0] == "create" and command[command.index("--name") + 1].endswith("-stage")
+    )
+    mounts = [command for i, command in enumerate(staging) if staging[i - 1] == "--mount"]
+    assert any("kata_output" in mount for mount in mounts)
+    assert any("readonly" not in mount and "-bundle" in mount for mount in mounts), mounts
+    # And an accidental start must exit immediately rather than sleep for a day.
+    assert "86400" not in " ".join(staging)
+
+
+def test_both_copies_go_through_the_unstarted_staging_container(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The whole reason it exists: bundle in, report out, neither through the agent."""
+    calls = _capture_docker_calls(monkeypatch, tmp_path)
+    copies = [command for command in calls if command[0] == "cp"]
+    assert len(copies) == 2
+    assert all("-stage" in " ".join(command) for command in copies), copies
+
+
+def test_the_staging_container_is_still_removed(monkeypatch, tmp_path: Path) -> None:
+    """A container that is never started is still a container: it must be disposed of, or the VM
+    accumulates one dead record per replica."""
+    calls = _capture_docker_calls(monkeypatch, tmp_path)
+    removed = [command[2] for command in calls if command[:2] == ["rm", "-f"]]
+    assert any(name.endswith("-stage") for name in removed), removed
