@@ -10,7 +10,7 @@ The current lane runs each challenge on **7 secretly sampled projects**, with
 > [!TIP]
 > **Current room values used when sealing an inference key:**
 > - **Room URL** — `https://700196fa6728300af579d0120a91bddda6da0dd2-8080.dstack-pha-prod9.phala.network`
-> - **Measurement** — `bdee3d6418e2e38f2d150eda4f2d74faff18ca35424891d0bc6859197a9d52a5`
+> - **Measurement** — `791cb67cb2457a25993a00a06fe136e951f82c0f23c5a9a90b9356a54fce3a67`
 > - **Providers you can use** — `openrouter`, `chutes`, `akashml`
 >
 > Your agent pays for its own model calls. Always check these values before
@@ -107,7 +107,7 @@ uv run --extra seal python kata_seal.py \
   --provider openrouter \
   --key-env OPENROUTER_API_KEY \
   --bundle submissions/sn60__bitsec/miner/alice-20260716-01 \
-  --measurement bdee3d6418e2e38f2d150eda4f2d74faff18ca35424891d0bc6859197a9d52a5
+  --measurement 791cb67cb2457a25993a00a06fe136e951f82c0f23c5a9a90b9356a54fce3a67
 ```
 
 This writes `sealed_inference_key` into the bundle. Pick `--provider` from
